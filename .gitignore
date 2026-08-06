@@ -17,6 +17,9 @@ htmlcov/
 .env
 .env.*
 !.env.example
+neo.yaml
+neo.local.yaml
+*.local.yaml
 *.log
 .DS_Store
 .idea/

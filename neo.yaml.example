@@ -1,0 +1,27 @@
+# Copy to neo.yaml and adjust for your provider/model.
+# Keep credentials in .env (for example OPENROUTER_API_KEY).
+
+provider: openrouter
+model: openai/gpt-4o-mini
+
+compaction:
+  context_window_tokens: 200000
+
+features:
+  agents_file: true
+  skills: true
+  prompt_caching: true
+
+output:
+  verbose: false
+
+# Optional named profile example:
+# provider: enterprise
+# providers:
+#   - id: enterprise
+#     name: Example Enterprise GPT
+#     provider: openai
+#     model: example.organization.language-model.gpt-5
+#     apiBase: https://llm-gateway.example.com/openai/v1
+#     api_key_env: ENTERPRISE_LLM_TOKEN
+#     protocol: chat_completions
