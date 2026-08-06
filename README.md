@@ -46,6 +46,23 @@ output:
   verbose: false
 ```
 
+### Configuration support status
+
+Not every setting carried over from the Go CLI is active in the Python port.
+Inactive settings remain accepted so configuration files stay forward-compatible,
+but changing them does not currently alter runtime behavior.
+
+| Setting | Status | Current behavior |
+| --- | --- | --- |
+| `features.agents_file` | Active | Loads applicable `AGENTS.md` files into the system prompt. |
+| `features.skills` | Active | Discovers skills and expands `$name` and `/name` invocations. |
+| `compaction.context_window_tokens` | Reserved | Parsed and validated; transcript compaction is not implemented yet. |
+| `features.prompt_caching` | Reserved | Parsed; provider prompt-cache controls are not emitted yet. |
+| `output.verbose` | Reserved | Parsed; the Python REPL currently uses one fixed tool-activity view. |
+
+The reserved settings should be tracked as implementation work in the issue
+tracker before being described as supported features.
+
 This local setup keeps both model selection and its token in the ignored
 `neo.yaml`:
 

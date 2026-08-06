@@ -5,14 +5,19 @@ provider: openrouter
 model: openai/gpt-4o-mini
 api_key: replace-with-your-openrouter-token
 
+# Reserved configuration: parsed and validated, but transcript compaction is
+# not implemented in the Python port yet. This currently has no runtime effect.
 compaction:
   context_window_tokens: 200000
 
 features:
-  agents_file: true
-  skills: true
+  agents_file: true     # Active: load applicable AGENTS.md instructions.
+  skills: true          # Active: discover and expand Neo skills.
+  # Reserved: parsed, but provider prompt caching is not implemented yet.
   prompt_caching: true
 
+# Reserved configuration: parsed, but verbose tool rendering is not implemented
+# in the Python REPL yet. This currently has no runtime effect.
 output:
   verbose: false
 
