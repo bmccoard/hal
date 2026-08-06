@@ -153,6 +153,57 @@ Interactive mode supports `/help`, `/clear`, `/model <id>`, `/exit`, the built-i
 `/design`, `/plan`, `/build`, and `/review` phases, discovered skill commands,
 and `!command` for a direct local shell command.
 
+### Skills
+
+Skills are reusable prompt instructions, not executable tools. Neo discovers:
+
+```text
+~/.neo/skills/<name>/SKILL.md             user-global skills
+<workspace>/.neo/skills/<name>/SKILL.md  project skills
+```
+
+A project skill overrides a global skill with the same name. Each `SKILL.md`
+needs YAML frontmatter containing `name` and `description`, followed by concise
+instructions:
+
+```markdown
+---
+name: example-skill
+description: Explain what the skill does and when it should be used.
+---
+
+# Example Skill
+
+Inspect the relevant files, follow the project instructions, and report
+evidence for the result.
+```
+
+This repository includes a working
+[`repo-summary`](.neo/skills/repo-summary/SKILL.md) example. Invoke project
+skills in interactive mode:
+
+```text
+neo> /repo-summary
+neo> Use $repo-summary to explain this repository.
+```
+
+`/name arguments` injects one skill and labels the trailing text as arguments.
+`$name` references can expand multiple skills once each in mention order. Skill
+expansion currently occurs only in interactive mode; `neo run` advertises the
+catalog but does not expand `/name` or `$name` invocations.
+
+### Project instructions (`AGENTS.md`)
+
+`AGENTS.md` provides repository guidance that applies automatically; unlike a
+skill, the user does not invoke it. Neo loads `~/.neo/AGENTS.md` first, then
+project `AGENTS.md` files from the workspace root down to the current directory,
+with more specific files appearing later in the prompt.
+
+Copy [`AGENTS.md.example`](AGENTS.md.example) to `AGENTS.md` and adapt it to the
+project's actual commands, architecture, safety rules, and delivery policy. The
+example suffix is intentional: it demonstrates the convention without changing
+this repository's active agent instructions.
+
 The model can call `bash`, `read_file`, `write_file`, `edit_file`, `grep`, and
 `glob`. Like the Go implementation, Neo is not a security sandbox. Run it inside
 an environment whose filesystem, process, network, and credential access match

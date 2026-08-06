@@ -1,0 +1,27 @@
+# Example Repository Instructions
+
+These instructions apply to all work in this repository.
+
+## Development workflow
+
+- Read `README.md` and `pyproject.toml` before changing package behavior.
+- Keep provider-specific translation in `src/neo/providers.py`; keep the agent
+  loop provider-neutral.
+- Preserve compatibility with Python 3.11 and newer.
+- Prefer focused changes and avoid adding dependencies when the standard
+  library is sufficient.
+- Never commit `neo.yaml`, API keys, credentials, private endpoints, or internal
+  model identifiers. Use fictional values in tracked examples and tests.
+
+## Verification
+
+- Run `python -m pytest -q` after code changes.
+- Run `python -m compileall -q src` after changing package modules.
+- Run `python -m neo doctor` after changing configuration or provider setup.
+- Build a wheel after changing packaging metadata.
+
+## Delivery
+
+- Summarize changed behavior and verification results.
+- Call out anything that could not be tested locally.
+- Do not commit or push unless the user explicitly requests it.

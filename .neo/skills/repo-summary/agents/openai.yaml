@@ -1,0 +1,4 @@
+interface:
+  display_name: "Repository Summary"
+  short_description: "Inspect and summarize the current repository"
+  default_prompt: "Use $repo-summary to inspect and summarize this repository."
