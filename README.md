@@ -1,4 +1,4 @@
-# Neo Python
+# Neo Python CLI
 
 Neo Python is a Python package port of the Neo CLI and is based on the upstream
 project at https://github.com/owainlewis/neo. It keeps Neo's provider-neutral
@@ -73,7 +73,14 @@ providers:
     apiBase: https://llm-gateway.example.com/openai/v1
     api_key: replace-with-your-enterprise-token
     protocol: chat_completions
+    max_tokens_parameter: max_completion_tokens
 ```
+
+Chat Completions gateways differ on the output-token field. Profiles use
+`max_tokens` by default for compatibility with older models. Set
+`max_tokens_parameter: max_completion_tokens` for GPT-5-class models or any
+gateway that rejects `max_tokens`. The setting is restricted to those two field
+names so arbitrary configuration cannot alter unrelated request fields.
 
 Alternatively, omit `api_key` and set the credential for the selected provider
 in the process environment:

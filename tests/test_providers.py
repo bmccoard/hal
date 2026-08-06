@@ -40,3 +40,25 @@ def test_custom_profile_accepts_inline_key(monkeypatch) -> None:
     })
     provider = create_provider(config)
     assert provider.api_key == "inline-placeholder"
+
+
+def test_custom_profile_sends_max_completion_tokens(monkeypatch) -> None:
+    config = parse_config({
+        "provider": "enterprise",
+        "providers": [{
+            "id": "enterprise", "name": "Enterprise", "provider": "openai",
+            "model": "gpt-5.1", "apiBase": "https://example.test/v1",
+            "api_key": "placeholder", "max_tokens_parameter": "max_completion_tokens",
+        }],
+    })
+    provider = create_provider(config)
+    captured = {}
+
+    def fake_post(url, payload, headers):
+        captured.update(payload)
+        return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    provider.complete(Request("gpt-5.1", "system", [Message("user", [ContentBlock("text", text="hello")])], [], max_tokens=321))
+    assert captured["max_completion_tokens"] == 321
+    assert "max_tokens" not in captured

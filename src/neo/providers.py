@@ -169,16 +169,19 @@ def _chat_messages(messages: list[Message]) -> list[dict[str, Any]]:
 class OpenRouterProvider(HTTPProvider):
     name = "openrouter"
 
-    def __init__(self, api_key: str, endpoint: str = "https://openrouter.ai/api/v1/chat/completions") -> None:
+    def __init__(self, api_key: str, endpoint: str = "https://openrouter.ai/api/v1/chat/completions",
+                 max_tokens_parameter: str = "max_tokens") -> None:
         self.api_key, self.endpoint = api_key, endpoint
+        self.max_tokens_parameter = max_tokens_parameter
 
     def complete(self, request: Request) -> Response:
         messages = [{"role": "system", "content": request.system}, *_chat_messages(request.messages)]
-        data = self._post(self.endpoint, {
+        payload = {
             "model": request.model, "messages": messages,
             "tools": [{"type": "function", "function": {"name": x.name, "description": x.description, "parameters": x.input_schema}} for x in request.tools],
-            "max_tokens": request.max_tokens,
-        }, {"Authorization": f"Bearer {self.api_key}"})
+            self.max_tokens_parameter: request.max_tokens,
+        }
+        data = self._post(self.endpoint, payload, {"Authorization": f"Bearer {self.api_key}"})
         if data.get("error"):
             raise ProviderError(f"openrouter: {data['error'].get('message', data['error'])}")
         choice = (data.get("choices") or [{}])[0]; message = choice.get("message") or {}
@@ -193,11 +196,12 @@ class OpenRouterProvider(HTTPProvider):
 class OpenAICompatibleProvider(OpenRouterProvider):
     """OpenAI-compatible Chat Completions provider at a custom API base."""
 
-    def __init__(self, name: str, api_key: str, api_base: str) -> None:
+    def __init__(self, name: str, api_key: str, api_base: str,
+                 max_tokens_parameter: str = "max_tokens") -> None:
         if not api_base:
             raise ProviderError(f"{name}: api_base is required")
         self.name = name
-        super().__init__(api_key, f"{api_base.rstrip('/')}/chat/completions")
+        super().__init__(api_key, f"{api_base.rstrip('/')}/chat/completions", max_tokens_parameter)
 
 
 class GoogleProvider(HTTPProvider):
@@ -248,7 +252,9 @@ def create_provider(config: Config) -> Provider:
     if not key: raise ProviderError(f"no API key is configured; set api_key or {env_name}")
     if profile:
         if profile.protocol == "chat_completions":
-            return OpenAICompatibleProvider(profile.name, key, profile.api_base)
+            return OpenAICompatibleProvider(
+                profile.name, key, profile.api_base, profile.max_tokens_parameter
+            )
         if backend == "openai":
             return OpenAIProvider(key, f"{profile.api_base.rstrip('/')}/responses")
     classes = {"anthropic": AnthropicProvider, "openai": OpenAIProvider, "openrouter": OpenRouterProvider, "google": GoogleProvider}

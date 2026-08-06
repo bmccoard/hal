@@ -26,3 +26,4 @@ output:
 #     apiBase: https://llm-gateway.example.com/openai/v1
 #     api_key: replace-with-your-enterprise-token
 #     protocol: chat_completions
+#     max_tokens_parameter: max_completion_tokens

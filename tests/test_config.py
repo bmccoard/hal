@@ -50,3 +50,27 @@ def test_inline_api_key_takes_precedence_over_environment(monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "environment-key")
     config = parse_config({"provider": "openrouter", "api_key": "inline-key"})
     assert config.credential() == "inline-key"
+
+
+def test_profile_accepts_max_completion_tokens_parameter() -> None:
+    config = parse_config({
+        "provider": "enterprise",
+        "providers": [{
+            "id": "enterprise", "name": "Enterprise", "provider": "openai",
+            "model": "gpt-5.1", "apiBase": "https://example.test/v1",
+            "api_key": "placeholder", "max_tokens_parameter": "max_completion_tokens",
+        }],
+    })
+    assert config.active_profile().max_tokens_parameter == "max_completion_tokens"
+
+
+def test_profile_rejects_unknown_max_tokens_parameter() -> None:
+    with pytest.raises(ValueError, match="unsupported max_tokens_parameter"):
+        parse_config({
+            "provider": "enterprise",
+            "providers": [{
+                "id": "enterprise", "name": "Enterprise", "provider": "openai",
+                "model": "model", "apiBase": "https://example.test/v1",
+                "max_tokens_parameter": "token_budget",
+            }],
+        })

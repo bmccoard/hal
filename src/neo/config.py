@@ -29,6 +29,7 @@ class ProviderProfile:
     api_key: str = ""
     api_key_env: str = ""
     protocol: str = "chat_completions"
+    max_tokens_parameter: str = "max_tokens"
 
 
 @dataclass(slots=True)
@@ -57,6 +58,11 @@ class Config:
             raise ValueError(f"provider profile {self.provider!r} has unknown backend {backend!r}")
         if profile and profile.protocol not in {"chat_completions", "responses"}:
             raise ValueError(f"provider profile {self.provider!r} has unsupported protocol {profile.protocol!r}")
+        if profile and profile.max_tokens_parameter not in {"max_tokens", "max_completion_tokens"}:
+            raise ValueError(
+                f"provider profile {self.provider!r} has unsupported "
+                f"max_tokens_parameter {profile.max_tokens_parameter!r}"
+            )
         if self.openai_auth not in {"api_key", "subscription"}:
             raise ValueError("openai_auth must be 'api_key' or 'subscription'")
         if not self.model:
@@ -142,6 +148,9 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
             api_key=str(raw.get("api_key") or raw.get("apiKey") or "").strip(),
             api_key_env=str(raw.get("api_key_env") or raw.get("apiKeyEnv") or "").strip(),
             protocol=str(raw.get("protocol") or "chat_completions").strip().lower(),
+            max_tokens_parameter=str(
+                raw.get("max_tokens_parameter") or raw.get("maxTokensParameter") or "max_tokens"
+            ).strip(),
         )
     cfg = Config(
         provider=str(data.get("provider") or "anthropic").strip().lower(),
