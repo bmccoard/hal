@@ -1,10 +1,11 @@
 # Neo Python
 
-This is a Python package port of the Go Neo CLI in the adjacent `neo-main`
-directory. It keeps Neo's provider-neutral agent loop, local-first configuration,
-built-in coding tools, project instructions, skills, named phases, headless mode,
-and resumable sessions. The interactive interface is a portable REPL rather than
-the Go version's Bubble Tea TUI.
+Neo Python is a Python package port of the Neo CLI and is based on the upstream
+project at https://github.com/owainlewis/neo. It keeps Neo's provider-neutral
+agent loop, local-first configuration, built-in coding tools, project
+instructions, skills, named phases, headless mode, and resumable sessions.
+The interactive interface is a portable REPL rather than the Go version's
+Bubble Tea TUI.
 
 ## Install
 
@@ -124,3 +125,14 @@ The package layout mirrors the Go architecture at a smaller scale:
 - `tools.py` owns executable local capabilities.
 - `config.py`, `context.py`, and `sessions.py` provide product features.
 - `cli.py` is the composition and process boundary.
+
+## Upstream Attribution
+
+This project is a Python conversion of Neo:
+
+- Upstream project: https://github.com/owainlewis/neo
+- Upstream license: MIT
+
+## License
+
+This repository is licensed under the MIT License. See [LICENSE](LICENSE).
