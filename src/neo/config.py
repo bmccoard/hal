@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ DEFAULT_MODELS = {
     "google": "gemini-3.5-flash",
 }
 PROVIDERS = frozenset(DEFAULT_MODELS)
+_ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
 
 
 @dataclass(slots=True)
@@ -37,7 +40,12 @@ class Config:
         if self.openai_auth not in {"api_key", "subscription"}:
             raise ValueError("openai_auth must be 'api_key' or 'subscription'")
         if not self.model:
-            self.model = "gpt-5-codex" if self.provider == "openai" and self.openai_auth == "subscription" else DEFAULT_MODELS[self.provider]
+            if self.provider == "openai" and self.openai_auth == "subscription":
+                self.model = "gpt-5-codex"
+            elif self.provider == "openrouter":
+                self.model = os.environ.get("OPENROUTER_MODEL", "").strip() or DEFAULT_MODELS[self.provider]
+            else:
+                self.model = DEFAULT_MODELS[self.provider]
         if self.context_window_tokens <= 0:
             raise ValueError("compaction.context_window_tokens must be positive")
         cleaned: list[str] = []
@@ -82,9 +90,31 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
     return cfg
 
 
+def load_dotenv(path: Path) -> None:
+    """Load a simple dotenv file without replacing exported environment values."""
+    if not path.is_file():
+        return
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as exc:
+        raise ValueError(f"load {path}: {exc}") from exc
+    for number, line in enumerate(lines, 1):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        match = _ENV_LINE.match(line)
+        if not match:
+            raise ValueError(f"load {path}: invalid assignment on line {number}")
+        name, value = match.groups()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        os.environ.setdefault(name, value)
+
+
 def load_config(cwd: Path | None = None, home: Path | None = None) -> Config:
     cwd = (cwd or Path.cwd()).resolve()
     home = home or Path.home()
+    load_dotenv(cwd / ".env")
     candidates = (cwd / "neo.yaml", home / ".neo" / "config.yaml")
     for path in candidates:
         if path.is_file():

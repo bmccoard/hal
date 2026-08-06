@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from neo.config import load_config, parse_config
+from neo.config import load_config, load_dotenv, parse_config
 
 
 def test_config_uses_first_hit_and_provider_default(tmp_path: Path) -> None:
@@ -19,3 +19,12 @@ def test_removed_permissions_are_rejected() -> None:
     with pytest.raises(ValueError, match="permissions has been removed"):
         parse_config({"permissions": {"mode": "full"}})
 
+
+def test_dotenv_loads_values_without_overriding_environment(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / ".env"
+    path.write_text("NEW_VALUE='from file'\nEXISTING=from-file\n", encoding="utf-8")
+    monkeypatch.delenv("NEW_VALUE", raising=False)
+    monkeypatch.setenv("EXISTING", "exported")
+    load_dotenv(path)
+    assert __import__("os").environ["NEW_VALUE"] == "from file"
+    assert __import__("os").environ["EXISTING"] == "exported"

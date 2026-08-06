@@ -26,6 +26,8 @@ python -m neo --help
 
 Neo loads the first file that exists: `./neo.yaml`, then
 `~/.neo/config.yaml`, then built-in defaults. Files are not merged.
+It also loads `./.env` when present, without replacing variables already
+exported by the parent shell. Dotenv files are ignored by Git by default.
 
 ```yaml
 provider: anthropic
@@ -42,6 +44,9 @@ features:
 output:
   verbose: false
 ```
+
+When `provider: openrouter` has no explicit `model`, `OPENROUTER_MODEL` from
+the environment or `.env` is used before the built-in model default.
 
 Set the credential for the selected provider:
 
@@ -91,4 +96,3 @@ The package layout mirrors the Go architecture at a smaller scale:
 - `tools.py` owns executable local capabilities.
 - `config.py`, `context.py`, and `sessions.py` provide product features.
 - `cli.py` is the composition and process boundary.
-
