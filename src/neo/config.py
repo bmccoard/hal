@@ -20,6 +20,17 @@ _ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\
 
 
 @dataclass(slots=True)
+class ProviderProfile:
+    name: str
+    display_name: str
+    provider: str
+    model: str
+    api_base: str = ""
+    api_key_env: str = ""
+    protocol: str = "chat_completions"
+
+
+@dataclass(slots=True)
 class Config:
     provider: str = "anthropic"
     model: str = ""
@@ -32,20 +43,29 @@ class Config:
     prompt_caching: bool = True
     verbose: bool = False
     phases: dict[str, dict[str, str]] = field(default_factory=dict)
+    providers: dict[str, ProviderProfile] = field(default_factory=dict)
     source: str = "embedded"
 
     def validate(self) -> None:
-        if self.provider not in PROVIDERS:
+        if self.provider not in PROVIDERS and self.provider not in self.providers:
             raise ValueError(f"unknown provider {self.provider!r}")
+        profile = self.providers.get(self.provider)
+        backend = profile.provider if profile else self.provider
+        if backend not in PROVIDERS:
+            raise ValueError(f"provider profile {self.provider!r} has unknown backend {backend!r}")
+        if profile and profile.protocol not in {"chat_completions", "responses"}:
+            raise ValueError(f"provider profile {self.provider!r} has unsupported protocol {profile.protocol!r}")
         if self.openai_auth not in {"api_key", "subscription"}:
             raise ValueError("openai_auth must be 'api_key' or 'subscription'")
         if not self.model:
-            if self.provider == "openai" and self.openai_auth == "subscription":
+            if profile and profile.model:
+                self.model = profile.model
+            elif backend == "openai" and self.openai_auth == "subscription":
                 self.model = "gpt-5-codex"
-            elif self.provider == "openrouter":
-                self.model = os.environ.get("OPENROUTER_MODEL", "").strip() or DEFAULT_MODELS[self.provider]
+            elif backend == "openrouter":
+                self.model = os.environ.get("OPENROUTER_MODEL", "").strip() or DEFAULT_MODELS[backend]
             else:
-                self.model = DEFAULT_MODELS[self.provider]
+                self.model = DEFAULT_MODELS[backend]
         if self.context_window_tokens <= 0:
             raise ValueError("compaction.context_window_tokens must be positive")
         cleaned: list[str] = []
@@ -56,6 +76,22 @@ class Config:
             if item not in cleaned:
                 cleaned.append(item)
         self.tool_approvals = cleaned
+
+    def active_profile(self) -> ProviderProfile | None:
+        return self.providers.get(self.provider)
+
+    def backend(self) -> str:
+        profile = self.active_profile()
+        return profile.provider if profile else self.provider
+
+    def credential_env(self) -> str:
+        profile = self.active_profile()
+        if profile and profile.api_key_env:
+            return profile.api_key_env
+        return {
+            "anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
+            "openrouter": "OPENROUTER_API_KEY", "google": "GOOGLE_API_KEY",
+        }[self.backend()]
 
 
 def _bool(section: dict[str, Any], name: str, default: bool) -> bool:
@@ -72,6 +108,30 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
     features = data.get("features") or {}
     output = data.get("output") or {}
     compaction = data.get("compaction") or {}
+    profiles: dict[str, ProviderProfile] = {}
+    raw_profiles = data.get("providers") or []
+    if isinstance(raw_profiles, dict):
+        raw_profiles = [{"name": name, **(value or {})} for name, value in raw_profiles.items()]
+    if not isinstance(raw_profiles, list):
+        raise ValueError("providers must be a list or mapping")
+    for raw in raw_profiles:
+        if not isinstance(raw, dict) or not str(raw.get("name") or "").strip():
+            raise ValueError("each provider profile needs a name")
+        display_name = str(raw["name"]).strip()
+        name = str(raw.get("id") or re.sub(r"[^a-z0-9_-]+", "-", display_name.lower()).strip("-")).strip().lower()
+        if not name:
+            raise ValueError("each provider profile needs a usable id or name")
+        if name in PROVIDERS:
+            raise ValueError(f"provider profile name {name!r} is reserved")
+        profiles[name] = ProviderProfile(
+            name=name,
+            display_name=display_name,
+            provider=str(raw.get("provider") or "openai").strip().lower(),
+            model=str(raw.get("model") or "").strip(),
+            api_base=str(raw.get("api_base") or raw.get("apiBase") or "").strip().rstrip("/"),
+            api_key_env=str(raw.get("api_key_env") or raw.get("apiKeyEnv") or "").strip(),
+            protocol=str(raw.get("protocol") or "chat_completions").strip().lower(),
+        )
     cfg = Config(
         provider=str(data.get("provider") or "anthropic").strip().lower(),
         model=str(data.get("model") or "").strip(),
@@ -84,6 +144,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         prompt_caching=_bool(features, "prompt_caching", True),
         verbose=_bool(output, "verbose", False),
         phases=dict(data.get("phases") or {}),
+        providers=profiles,
         source=source,
     )
     cfg.validate()

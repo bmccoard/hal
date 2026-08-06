@@ -190,6 +190,16 @@ class OpenRouterProvider(HTTPProvider):
         return Response(blocks, "tool_use" if message.get("tool_calls") else choice.get("finish_reason", "end_turn"), Usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)))
 
 
+class OpenAICompatibleProvider(OpenRouterProvider):
+    """OpenAI-compatible Chat Completions provider at a custom API base."""
+
+    def __init__(self, name: str, api_key: str, api_base: str) -> None:
+        if not api_base:
+            raise ProviderError(f"{name}: api_base is required")
+        self.name = name
+        super().__init__(api_key, f"{api_base.rstrip('/')}/chat/completions")
+
+
 class GoogleProvider(HTTPProvider):
     name = "google"
 
@@ -229,11 +239,17 @@ class GoogleProvider(HTTPProvider):
 
 
 def create_provider(config: Config) -> Provider:
-    env_names = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY", "google": "GOOGLE_API_KEY"}
-    if config.provider == "openai" and config.openai_auth == "subscription":
+    profile = config.active_profile()
+    backend = config.backend()
+    if backend == "openai" and config.openai_auth == "subscription" and profile is None:
         raise ProviderError("OpenAI subscription auth is not supported by the Python port; use openai_auth: api_key")
-    env_name = env_names[config.provider]
+    env_name = config.credential_env()
     key = os.environ.get(env_name, "").strip()
     if not key: raise ProviderError(f"{env_name} is not set")
+    if profile:
+        if profile.protocol == "chat_completions":
+            return OpenAICompatibleProvider(profile.name, key, profile.api_base)
+        if backend == "openai":
+            return OpenAIProvider(key, f"{profile.api_base.rstrip('/')}/responses")
     classes = {"anthropic": AnthropicProvider, "openai": OpenAIProvider, "openrouter": OpenRouterProvider, "google": GoogleProvider}
-    return classes[config.provider](key)
+    return classes[backend](key)

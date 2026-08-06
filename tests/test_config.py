@@ -28,3 +28,19 @@ def test_dotenv_loads_values_without_overriding_environment(tmp_path: Path, monk
     load_dotenv(path)
     assert __import__("os").environ["NEW_VALUE"] == "from file"
     assert __import__("os").environ["EXISTING"] == "exported"
+
+
+def test_named_provider_profile_accepts_camel_case_api_base() -> None:
+    config = parse_config({
+        "provider": "enterprise",
+        "providers": [{
+            "id": "enterprise", "name": "Example Enterprise GPT", "provider": "openai",
+            "model": "example.organization.language-model.gpt-5",
+            "apiBase": "https://example.test/openai/v1/",
+            "api_key_env": "ENTERPRISE_LLM_TOKEN",
+        }],
+    })
+    assert config.backend() == "openai"
+    assert config.model == "example.organization.language-model.gpt-5"
+    assert config.active_profile().display_name == "Example Enterprise GPT"
+    assert config.active_profile().api_base == "https://example.test/openai/v1"

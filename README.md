@@ -45,8 +45,36 @@ output:
   verbose: false
 ```
 
-When `provider: openrouter` has no explicit `model`, `OPENROUTER_MODEL` from
-the environment or `.env` is used before the built-in model default.
+Keep model selection in `neo.yaml` and credentials in `.env`. For example:
+
+```yaml
+provider: openrouter
+model: openai/gpt-4o-mini
+```
+
+```dotenv
+OPENROUTER_API_KEY=replace-with-your-openrouter-token
+```
+
+For backward compatibility, when an OpenRouter configuration omits `model`,
+`OPENROUTER_MODEL` is used before the built-in default.
+
+Custom OpenAI-compatible gateways can be defined as named profiles. This
+repository includes an inactive `enterprise` profile; switch the top-level setting
+to `provider: enterprise` when connected to that network and set
+`ENTERPRISE_LLM_TOKEN` in `.env`:
+
+```yaml
+provider: enterprise
+providers:
+  - id: enterprise
+    name: Example Enterprise GPT
+    provider: openai
+    model: example.organization.language-model.gpt-5
+    apiBase: https://llm-gateway.example.com/openai/v1
+    api_key_env: ENTERPRISE_LLM_TOKEN
+    protocol: chat_completions
+```
 
 Set the credential for the selected provider:
 

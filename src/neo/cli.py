@@ -155,8 +155,8 @@ def run_sessions(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
 
 
 def _credential_status(cfg: Config) -> tuple[str, str]:
-    env = {"anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY", "google": "GOOGLE_API_KEY"}[cfg.provider]
-    if cfg.provider == "openai" and cfg.openai_auth == "subscription": return "fail", "subscription auth is unavailable in the Python port"
+    env = cfg.credential_env()
+    if cfg.backend() == "openai" and cfg.openai_auth == "subscription" and cfg.active_profile() is None: return "fail", "subscription auth is unavailable in the Python port"
     return ("pass", f"{env} is set") if os.environ.get(env, "").strip() else ("fail", f"set {env}")
 
 
