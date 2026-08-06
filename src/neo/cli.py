@@ -17,7 +17,7 @@ from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
 from .providers import ProviderError, create_provider
 from .sessions import Metadata, Session, SessionStore
-from .tools import default_registry, workspace_root
+from .tools import BashTool, default_registry, workspace_root
 
 
 USAGE = """neo — a Python coding agent
@@ -209,7 +209,11 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
             if text == "/clear": agent.messages.clear(); agent.usage = type(agent.usage)(); print("Conversation cleared.", file=stdout); continue
             if text.startswith("/model "): agent.model = text[7:].strip(); session.metadata.model = agent.model; print(f"Model: {agent.model}", file=stdout); continue
             if text.startswith("!"):
-                subprocess.run(text[1:].strip(), cwd=cwd, shell=True); continue
+                try:
+                    print(BashTool(cwd).run({"command": text[1:].strip()}), file=stdout)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    print(f"error: {exc}", file=stderr)
+                continue
             expanded, display = expand_user_input(text, skills, phases)
             try: agent.send(expanded, display); print(file=stdout)
             except (ProviderError, OSError, ValueError, RuntimeError) as exc: print(f"error: {exc}", file=stderr)

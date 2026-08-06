@@ -113,15 +113,41 @@ separate subscription transport; use `openai_auth: api_key` in this port.
 
 ## Use
 
-```bash
-neo                         # interactive chat
-neo run "explain this repo" # one prompt, no session
-neo run --json "run tests"
-neo sessions
-neo sessions search parser
-neo resume sess_0123456789abcdef
-neo doctor
-```
+These are operating-system shell commands, not model tools or skills:
+
+| Command | What it does |
+| --- | --- |
+| `neo` | Starts an interactive conversation and saves it as a session. |
+| `neo run "..."` | Runs one prompt and exits without creating a session. |
+| `neo run --json "..."` | Runs one headless prompt and returns JSON containing status, timing, tool counts, and the final answer. |
+| `neo sessions` | Lists locally saved interactive sessions from `~/.neo/sessions/`. |
+| `neo sessions search parser` | Searches saved transcripts for `parser`. |
+| `neo resume <id>` | Continues a saved interactive session, including its messages, model, usage, and working directory. |
+| `neo doctor` | Checks configuration, credentials, model, session storage, Git, and workspace status without contacting the model. |
+
+`neo run "run tests"` asks the model to run tests; it does not execute a fixed
+test command itself. The model normally fulfills that request with its shell
+tool.
+
+### Commands, tools, skills, and phases
+
+- **CLI commands** are entered in the operating-system shell, such as `neo run`
+  and `neo doctor`.
+- **Interactive commands** are entered at the `neo>` prompt, such as `/help`,
+  `/clear`, `/model`, and `/exit`.
+- **Tools** are executable capabilities available to the model: `bash`,
+  `read_file`, `write_file`, `edit_file`, `grep`, and `glob`.
+- **Skills** are reusable instruction documents stored at
+  `.neo/skills/<name>/SKILL.md`. They guide the model but do not execute code by
+  themselves.
+- **Named phases** are built-in one-turn instruction modes: `/design`, `/plan`,
+  `/build`, and `/review`.
+
+The tool retains the provider-facing name `bash` for compatibility, but selects
+the native shell explicitly. On Windows it uses `pwsh`, then Windows PowerShell,
+and falls back to `cmd.exe` only when neither is available. On Unix-like systems
+it uses Bash and falls back to `/bin/sh`. Interactive `!command` uses the same
+selection. Write commands in the syntax of the shell installed on the machine.
 
 Interactive mode supports `/help`, `/clear`, `/model <id>`, `/exit`, the built-in
 `/design`, `/plan`, `/build`, and `/review` phases, discovered skill commands,

@@ -4,6 +4,7 @@ import fnmatch
 import json
 import os
 import re
+import shutil
 import subprocess
 from abc import ABC, abstractmethod
 from pathlib import Path
@@ -21,6 +22,20 @@ def _bounded(text: str, limit: int = MAX_RESULT) -> str:
         return text
     half = max(1, (limit - 100) // 2)
     return raw[:half].decode("utf-8", "replace") + "\n... output truncated ...\n" + raw[-half:].decode("utf-8", "replace")
+
+
+def shell_argv(command: str, platform: str | None = None) -> list[str]:
+    """Select an explicit native shell instead of relying on shell=True."""
+    platform = platform or os.name
+    if platform == "nt":
+        executable = shutil.which("pwsh") or shutil.which("powershell")
+        if executable:
+            return [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
+    executable = shutil.which("bash")
+    if executable:
+        return [executable, "-lc", command]
+    return [shutil.which("sh") or "/bin/sh", "-c", command]
 
 
 class Tool(ABC):
@@ -41,7 +56,7 @@ class BashTool(Tool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("bash", "Run a shell command in the working directory.", {
+        return ToolSpec("bash", "Run a command in the native shell (PowerShell on Windows; Bash on Unix).", {
             "type": "object", "properties": {"command": {"type": "string"}, "timeout": {"type": "number"}}, "required": ["command"]
         })
 
@@ -51,7 +66,7 @@ class BashTool(Tool):
             raise ValueError("command must be a non-empty string")
         timeout = min(float(arguments.get("timeout", self.timeout)), self.timeout)
         try:
-            result = subprocess.run(command, cwd=self.cwd, shell=True, capture_output=True, text=True, timeout=timeout)
+            result = subprocess.run(shell_argv(command), cwd=self.cwd, capture_output=True, text=True, timeout=timeout)
         except subprocess.TimeoutExpired as exc:
             partial = (exc.stdout or "") + (exc.stderr or "")
             raise RuntimeError(f"command timed out after {timeout:g}s\n{_bounded(partial)}") from exc
