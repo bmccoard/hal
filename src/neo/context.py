@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+import yaml
+
+from .config import Config
+from .tools import workspace_root
+
+
+SYSTEM_PROMPT = """You are neo, a focused coding agent.
+
+Operate in the user's current working directory. Use the available tools to read files,
+inspect code with bash, and make edits. Prefer small, verified changes. Run tests after
+you change code. When you finish a task, briefly summarize what changed.
+
+Before tool calls, write one short sentence explaining what you are checking or
+changing and why. Do not narrate obvious individual calls or expose private reasoning.
+Issue independent reads, searches, or inspections together in one response."""
+
+
+@dataclass(slots=True)
+class Skill:
+    name: str
+    description: str
+    body: str
+    path: Path
+
+
+@dataclass(slots=True)
+class Phase:
+    name: str
+    description: str
+    prompt: str
+
+
+_PHASES = {
+    "design": ("Design a product change, feature, or bug fix", "Design the requested change before implementation. Read the repository instructions, relevant documentation, and current code. Define acceptance criteria and the smallest coherent scope. Stop after the design; do not change production code."),
+    "plan": ("Break accepted work into small, verifiable tasks", "Plan the requested work without implementing it. Break the outcome into small ordered tasks with concrete results, dependencies, and verification. Stop before changing production code."),
+    "build": ("Implement, test, and self-review a complete change", "Build the requested change completely. Implement the smallest coherent change without placeholders, run focused checks, review the complete diff, fix valid findings, and update documentation when behavior changes."),
+    "review": ("Review and improve code, PR feedback, and CI results", "Review the requested scope with fresh context. Inspect the diff and surrounding code for correctness, regressions, security, failure handling, complexity, and tests. Fix valid findings in scope and rerun affected checks."),
+}
+
+
+def resolve_phases(config: Config) -> dict[str, Phase]:
+    result = {name: Phase(name, values[0], values[1]) for name, values in _PHASES.items()}
+    for name, value in config.phases.items():
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name) or name in {"help", "clear", "model"}:
+            raise ValueError(f"invalid or reserved phase name {name!r}")
+        previous = result.get(name, Phase(name, f"Run the {name.replace('_', ' ')} phase", ""))
+        result[name] = Phase(name, str(value.get("description") or previous.description).strip(), str(value.get("prompt") or previous.prompt).strip())
+        if not result[name].prompt:
+            raise ValueError(f"phase {name!r} needs a prompt")
+    return result
+
+
+def load_skills(cwd: Path, home: Path | None = None) -> list[Skill]:
+    found: dict[str, Skill] = {}
+    for parent in ((home or Path.home()) / ".neo" / "skills", workspace_root(cwd) / ".neo" / "skills"):
+        if not parent.is_dir():
+            continue
+        for path in parent.glob("*/SKILL.md"):
+            text = path.read_text(encoding="utf-8")
+            meta: dict[str, object] = {}
+            body = text
+            if text.startswith("---\n"):
+                match = re.match(r"---\n(.*?)\n---(?:\n|$)(.*)", text, re.DOTALL)
+                if match:
+                    meta = yaml.safe_load(match.group(1)) or {}
+                    body = match.group(2)
+            name = str(meta.get("name") or path.parent.name).strip().lower()
+            if body.strip():
+                found[name] = Skill(name, str(meta.get("description") or "").strip(), body.strip(), path)
+    return sorted(found.values(), key=lambda x: x.name)
+
+
+def load_agents_files(cwd: Path, home: Path | None = None) -> list[tuple[Path, str]]:
+    docs: list[tuple[Path, str]] = []
+    global_path = (home or Path.home()) / ".neo" / "AGENTS.md"
+    if global_path.is_file() and (text := global_path.read_text(encoding="utf-8").strip()):
+        docs.append((global_path, text))
+    root = workspace_root(cwd).resolve()
+    current = cwd.resolve()
+    chain = []
+    while True:
+        chain.append(current)
+        if current == root: break
+        if root not in current.parents: break
+        current = current.parent
+    for directory in reversed(chain):
+        path = directory / "AGENTS.md"
+        try:
+            if path.is_file() and path.resolve().is_relative_to(root) and (text := path.read_text(encoding="utf-8").strip()):
+                docs.append((path, text))
+        except OSError:
+            continue
+    return docs
+
+
+def build_system(config: Config, cwd: Path, skills: list[Skill], phases: dict[str, Phase]) -> str:
+    text = SYSTEM_PROMPT
+    text += "\n\n# Named phases\n" + "".join(f"\n- `/{p.name}`: {p.description}" for p in phases.values())
+    if skills:
+        text += "\n\n# Available skills\n" + "".join(f"\n- `${s.name}`" + (f": {s.description}" if s.description else "") for s in skills)
+    if config.agents_file:
+        docs = load_agents_files(cwd)
+        if docs:
+            text += "\n\n# Project instructions\nTreat these AGENTS.md files as authoritative user guidance."
+            for path, body in docs:
+                text += f"\n\n## {path}\n\n{body}"
+    return text
+
+
+def expand_user_input(text: str, skills: list[Skill], phases: dict[str, Phase]) -> tuple[str, str]:
+    visible = text
+    if text.startswith("/"):
+        command, _, args = text[1:].partition(" ")
+        if command in phases:
+            phase = phases[command]
+            request = args.strip() or "Apply this phase to the current repository and conversation context."
+            return f"[named phase: {command}]\n{phase.prompt}\n\nUser request:\n{request}", visible
+        skill = next((item for item in skills if item.name == command.lower()), None)
+        if skill:
+            suffix = f"\n\nArguments:\n{args.strip()}" if args.strip() else ""
+            return f"[skill: {skill.name}]\n{skill.body}{suffix}", visible
+    by_name = {skill.name: skill for skill in skills}
+    used = []
+    for name in re.findall(r"\$([A-Za-z0-9_-]+)", text):
+        name = name.lower()
+        if name in by_name and name not in used: used.append(name)
+    if used:
+        prefix = "\n\n".join(f"[skill: {name}]\n{by_name[name].body}" for name in used)
+        return f"{prefix}\n\n{text}", visible
+    return text, ""
