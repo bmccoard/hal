@@ -44,3 +44,9 @@ def test_named_provider_profile_accepts_camel_case_api_base() -> None:
     assert config.model == "example.organization.language-model.gpt-5"
     assert config.active_profile().display_name == "Example Enterprise GPT"
     assert config.active_profile().api_base == "https://example.test/openai/v1"
+
+
+def test_inline_api_key_takes_precedence_over_environment(monkeypatch) -> None:
+    monkeypatch.setenv("OPENROUTER_API_KEY", "environment-key")
+    config = parse_config({"provider": "openrouter", "api_key": "inline-key"})
+    assert config.credential() == "inline-key"

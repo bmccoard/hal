@@ -244,8 +244,8 @@ def create_provider(config: Config) -> Provider:
     if backend == "openai" and config.openai_auth == "subscription" and profile is None:
         raise ProviderError("OpenAI subscription auth is not supported by the Python port; use openai_auth: api_key")
     env_name = config.credential_env()
-    key = os.environ.get(env_name, "").strip()
-    if not key: raise ProviderError(f"{env_name} is not set")
+    key = config.credential()
+    if not key: raise ProviderError(f"no API key is configured; set api_key or {env_name}")
     if profile:
         if profile.protocol == "chat_completions":
             return OpenAICompatibleProvider(profile.name, key, profile.api_base)

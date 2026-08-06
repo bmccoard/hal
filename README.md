@@ -26,9 +26,9 @@ python -m neo --help
 ## Configure
 
 Neo loads the first file that exists: `./neo.yaml`, then
-`~/.neo/config.yaml`, then built-in defaults. Files are not merged.
-It also loads `./.env` when present, without replacing variables already
-exported by the parent shell. Dotenv files are ignored by Git by default.
+`~/.neo/config.yaml`, then built-in defaults. Files are not merged. Copy
+[`neo.yaml.example`](neo.yaml.example) to `neo.yaml`, which is ignored by Git
+and may contain local credentials. Never commit `neo.yaml`.
 
 ```yaml
 provider: anthropic
@@ -46,24 +46,22 @@ output:
   verbose: false
 ```
 
-Keep model selection in `neo.yaml` and credentials in `.env`. For example:
+This local setup keeps both model selection and its token in the ignored
+`neo.yaml`:
 
 ```yaml
 provider: openrouter
 model: openai/gpt-4o-mini
+api_key: replace-with-your-openrouter-token
 ```
 
-```dotenv
-OPENROUTER_API_KEY=replace-with-your-openrouter-token
-```
+Environment variables remain supported for installations that prefer them.
+When an OpenRouter configuration omits `model`, `OPENROUTER_MODEL` is used
+before the built-in default.
 
-For backward compatibility, when an OpenRouter configuration omits `model`,
-`OPENROUTER_MODEL` is used before the built-in default.
-
-Custom OpenAI-compatible gateways can be defined as named profiles. This
-repository includes an inactive `enterprise` profile; switch the top-level setting
-to `provider: enterprise` when connected to that network and set
-`ENTERPRISE_LLM_TOKEN` in `.env`:
+Custom OpenAI-compatible gateways can be defined as named profiles. The example
+below is intentionally fictional; replace every endpoint, model, and credential
+value with values supplied by your organization:
 
 ```yaml
 provider: enterprise
@@ -73,11 +71,12 @@ providers:
     provider: openai
     model: example.organization.language-model.gpt-5
     apiBase: https://llm-gateway.example.com/openai/v1
-    api_key_env: ENTERPRISE_LLM_TOKEN
+    api_key: replace-with-your-enterprise-token
     protocol: chat_completions
 ```
 
-Set the credential for the selected provider:
+Alternatively, omit `api_key` and set the credential for the selected provider
+in the process environment:
 
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY`

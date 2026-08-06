@@ -26,3 +26,17 @@ def test_custom_openai_profile_uses_chat_completions_endpoint(monkeypatch) -> No
     assert response.content[0].text == "ok"
     assert captured["url"].endswith("/chat/completions")
     assert captured["headers"]["Authorization"] == "Bearer placeholder-token"
+
+
+def test_custom_profile_accepts_inline_key(monkeypatch) -> None:
+    monkeypatch.delenv("ENTERPRISE_LLM_TOKEN", raising=False)
+    config = parse_config({
+        "provider": "enterprise",
+        "providers": [{
+            "id": "enterprise", "name": "Enterprise", "provider": "openai",
+            "model": "internal-model", "apiBase": "https://example.test/v1",
+            "api_key": "inline-placeholder",
+        }],
+    })
+    provider = create_provider(config)
+    assert provider.api_key == "inline-placeholder"

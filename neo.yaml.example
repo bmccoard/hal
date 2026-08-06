@@ -1,8 +1,9 @@
 # Copy to neo.yaml and adjust for your provider/model.
-# Keep credentials in .env (for example OPENROUTER_API_KEY).
+# neo.yaml is ignored by Git and may contain a local API key. Never commit it.
 
 provider: openrouter
 model: openai/gpt-4o-mini
+api_key: replace-with-your-openrouter-token
 
 compaction:
   context_window_tokens: 200000
@@ -23,5 +24,5 @@ output:
 #     provider: openai
 #     model: example.organization.language-model.gpt-5
 #     apiBase: https://llm-gateway.example.com/openai/v1
-#     api_key_env: ENTERPRISE_LLM_TOKEN
+#     api_key: replace-with-your-enterprise-token
 #     protocol: chat_completions

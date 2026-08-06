@@ -26,6 +26,7 @@ class ProviderProfile:
     provider: str
     model: str
     api_base: str = ""
+    api_key: str = ""
     api_key_env: str = ""
     protocol: str = "chat_completions"
 
@@ -35,6 +36,7 @@ class Config:
     provider: str = "anthropic"
     model: str = ""
     openai_auth: str = "api_key"
+    api_key: str = ""
     subagents: dict[str, str] = field(default_factory=dict)
     tool_approvals: list[str] = field(default_factory=list)
     context_window_tokens: int = 200_000
@@ -93,6 +95,14 @@ class Config:
             "openrouter": "OPENROUTER_API_KEY", "google": "GOOGLE_API_KEY",
         }[self.backend()]
 
+    def credential(self) -> str:
+        profile = self.active_profile()
+        if profile and profile.api_key:
+            return profile.api_key
+        if self.api_key:
+            return self.api_key
+        return os.environ.get(self.credential_env(), "").strip()
+
 
 def _bool(section: dict[str, Any], name: str, default: bool) -> bool:
     value = section.get(name, default)
@@ -129,6 +139,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
             provider=str(raw.get("provider") or "openai").strip().lower(),
             model=str(raw.get("model") or "").strip(),
             api_base=str(raw.get("api_base") or raw.get("apiBase") or "").strip().rstrip("/"),
+            api_key=str(raw.get("api_key") or raw.get("apiKey") or "").strip(),
             api_key_env=str(raw.get("api_key_env") or raw.get("apiKeyEnv") or "").strip(),
             protocol=str(raw.get("protocol") or "chat_completions").strip().lower(),
         )
@@ -136,6 +147,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         provider=str(data.get("provider") or "anthropic").strip().lower(),
         model=str(data.get("model") or "").strip(),
         openai_auth=str(data.get("openai_auth") or "api_key").strip().lower(),
+        api_key=str(data.get("api_key") or data.get("apiKey") or "").strip(),
         subagents=dict(data.get("subagents") or {}),
         tool_approvals=list(data.get("tool_approvals") or []),
         context_window_tokens=int(compaction.get("context_window_tokens", 200_000)),

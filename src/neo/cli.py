@@ -157,7 +157,10 @@ def run_sessions(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
 def _credential_status(cfg: Config) -> tuple[str, str]:
     env = cfg.credential_env()
     if cfg.backend() == "openai" and cfg.openai_auth == "subscription" and cfg.active_profile() is None: return "fail", "subscription auth is unavailable in the Python port"
-    return ("pass", f"{env} is set") if os.environ.get(env, "").strip() else ("fail", f"set {env}")
+    profile = cfg.active_profile()
+    if (profile and profile.api_key) or cfg.api_key:
+        return "pass", "inline API key is configured"
+    return ("pass", f"{env} is set") if os.environ.get(env, "").strip() else ("fail", f"set api_key or {env}")
 
 
 def run_doctor(stdout: TextIO) -> int:
