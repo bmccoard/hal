@@ -3,11 +3,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
-import subprocess
 import sys
 import time
-from dataclasses import asdict
 from pathlib import Path
 from typing import TextIO
 
@@ -16,6 +13,7 @@ from .agent import Agent, Event, EventKind
 from .cancellation import CancelledError, CancellationToken, cancel_on_sigint
 from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
+from .git import GitError, create_git_backend
 from .providers import ProviderError, create_provider
 from .sessions import Metadata, Session, SessionStore
 from .tools import BashTool, default_registry, workspace_root
@@ -84,7 +82,7 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
 
     agent = Agent(provider, config.model, system, default_registry(
                       cwd, workspace_root(cwd), config.tool_approvals if interactive else None,
-                      confirm if interactive else None),
+                      confirm if interactive else None, config.git_backend),
                   messages=session.messages if session else None, usage=session.usage if session else None,
                   on_event=event)
     return agent, skills, phases
@@ -165,18 +163,25 @@ def _credential_status(cfg: Config) -> tuple[str, str]:
 
 
 def run_doctor(stdout: TextIO) -> int:
-    checks: list[tuple[str, str, str]] = []; failed = False
+    checks: list[tuple[str, str, str]] = []; failed = False; git_preference = "auto"
     try:
         cfg = load_config(); checks.extend([("pass", "config", f"loaded {cfg.source}"), ("pass", "provider", cfg.provider), (*_credential_status(cfg), "")])
         status, detail = _credential_status(cfg); checks[-1] = (status, "credentials", detail); checks.append(("pass", "model", cfg.model)); failed |= status == "fail"
+        git_preference = cfg.git_backend
     except ValueError as exc:
         checks.append(("fail", "config", str(exc))); failed = True
     directory = SessionStore().directory; checks.append(("pass" if directory.is_dir() else "warn", "sessions", f"store {'is available' if directory.is_dir() else 'will be created'} at {_short(str(directory))}"))
-    git = shutil.which("git")
-    checks.append(("pass" if git else "fail", "git", "git executable found" if git else "git executable not found in PATH")); failed |= not bool(git)
-    if git:
-        result = subprocess.run([git, "rev-parse", "--show-toplevel"], capture_output=True, text=True)
-        checks.append(("pass" if result.returncode == 0 else "warn", "workspace", f"git root {_short(result.stdout.strip())}" if result.returncode == 0 else "current directory is not a git workspace"))
+    try:
+        root = workspace_root(Path.cwd())
+        git = create_git_backend(root, git_preference)
+        checks.append(("pass", "git", f"{git.name} backend available"))
+        repository = git.is_repository()
+        checks.append((
+            "pass" if repository else "warn", "workspace",
+            f"Git repository at {_short(str(root))}" if repository else "current directory is not a Git workspace",
+        ))
+    except (GitError, OSError, ValueError) as exc:
+        checks.append(("fail", "git", str(exc))); failed = True
     print("STATUS\tCHECK\tDETAIL", file=stdout)
     for row in checks: print("\t".join(row), file=stdout)
     return 1 if failed else 0
@@ -234,7 +239,7 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
                 print(f"error: {exc}", file=stderr)
             _save_live_session(store, session, agent, stderr)
         return 0 if _save_live_session(store, session, agent, stderr) else 1
-    except (ProviderError, OSError, ValueError, json.JSONDecodeError) as exc:
+    except (GitError, ProviderError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"chat: {exc}", file=stderr); return 1
 
 

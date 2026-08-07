@@ -9,7 +9,7 @@ description = "A Python port of the Neo coding-agent CLI"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = ["PyYAML>=6.0"]
+dependencies = ["PyYAML>=6.0", "dulwich>=0.24,<0.26"]
 
 [project.scripts]
 neo = "neo.cli:main"
@@ -23,4 +23,3 @@ packages = ["src/neo"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
-

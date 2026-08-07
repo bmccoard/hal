@@ -91,4 +91,7 @@ def test_system_prompt_defaults_questions_and_examples_to_read_only(
     assert "unless the user explicitly asks" in normalized
     assert "Installing, upgrading, or removing dependencies" in normalized
     assert "obtain the user's approval first" in normalized
+    assert 'Treat "check in" and "commit"' in normalized
+    assert "do not invoke Git through the shell" in normalized
+    assert "Never push" in normalized
     assert "# Runtime environment\n- test shell" in system

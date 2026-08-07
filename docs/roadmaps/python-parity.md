@@ -52,6 +52,9 @@ tests, or documentation recorded in the implementation log.
   calls, tools, and the complete agent loop rather than only shortening one HTTP call.
 - [x] Add signal handling and cancellation propagation. Interrupt provider requests,
   shell process trees, searches, reads, and pending calls without corrupting history.
+- [x] Add structured Git status/diff/log/commit/push tools with native-Git preference,
+  automatic Dulwich fallback, explicit backend configuration, local-only "check in"
+  semantics, path-scoped commits, and doctor diagnostics.
 - [ ] Stream/bound tool output before it can consume unbounded memory. Include useful
   truncation metadata and preserve both the beginning and end of shell output.
 - [x] Make `write_file` and `edit_file` atomic and preserve existing file modes.
@@ -212,6 +215,7 @@ tests, or documentation recorded in the implementation log.
 | 2026-08-07 | Add typed agent events with commentary/text separation, call identity, timing, and structured failures | `src/neo/agent.py`, `src/neo/cli.py`, `tests/test_agent.py` | Full suite: 45 passed; Windows help/version smoke passed |
 | 2026-08-07 | Propagate cooperative cancellation and deadlines through the core loop, provider I/O/retries, tools, and headless mode; preserve cancelled tool transcripts and terminate shell process trees | `src/neo/cancellation.py`, `src/neo/agent.py`, `src/neo/providers.py`, `src/neo/tools.py`, `src/neo/cli.py`, `tests/test_agent.py`, `tests/test_providers.py`, `tests/test_tools.py`, `tests/test_cli.py`, `README.md` | Full suite: 49 passed; compileall and Windows help/version/shell-cancellation smoke passed |
 | 2026-08-07 | Convert interactive SIGINT into active-turn cancellation, restore idle Ctrl-C behavior, save valid cancelled transcripts, and retain live state after save failures | `src/neo/cancellation.py`, `src/neo/cli.py`, `tests/test_cli.py`, `README.md` | Full suite: 51 passed; compileall and Windows help/version smoke passed |
+| 2026-08-07 | Add safe structured Git tools with native/Dulwich backends, automatic no-binary fallback, local-only check-ins, explicit pushes, doctor integration, configuration, and packaging | `src/neo/git.py`, `src/neo/git_tools.py`, `src/neo/tools.py`, `src/neo/config.py`, `src/neo/context.py`, `src/neo/cli.py`, `tests/test_git.py`, `tests/test_config.py`, `tests/test_context.py`, `tests/test_cli.py`, `tests/test_tools.py`, `pyproject.toml`, `README.md`, `neo.yaml.example`, `docs/designs/git-integration.md` | Full suite: 66 passed; compileall, pip check, wheel build, native doctor, native/Dulwich commits, and Dulwich local-remote push passed on Windows |
 
 ## Final parity gate
 

@@ -38,6 +38,7 @@ class Config:
     model: str = ""
     openai_auth: str = "api_key"
     api_key: str = ""
+    git_backend: str = "auto"
     subagents: dict[str, str] = field(default_factory=dict)
     tool_approvals: list[str] = field(default_factory=list)
     context_window_tokens: int = 200_000
@@ -65,6 +66,8 @@ class Config:
             )
         if self.openai_auth not in {"api_key", "subscription"}:
             raise ValueError("openai_auth must be 'api_key' or 'subscription'")
+        if self.git_backend not in {"auto", "native", "dulwich"}:
+            raise ValueError("git.backend must be 'auto', 'native', or 'dulwich'")
         if not self.model:
             if profile and profile.model:
                 self.model = profile.model
@@ -124,6 +127,9 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
     features = data.get("features") or {}
     output = data.get("output") or {}
     compaction = data.get("compaction") or {}
+    git = data.get("git") or {}
+    if not isinstance(git, dict):
+        raise ValueError("git must be a mapping")
     profiles: dict[str, ProviderProfile] = {}
     raw_profiles = data.get("providers") or []
     if isinstance(raw_profiles, dict):
@@ -157,6 +163,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         model=str(data.get("model") or "").strip(),
         openai_auth=str(data.get("openai_auth") or "api_key").strip().lower(),
         api_key=str(data.get("api_key") or data.get("apiKey") or "").strip(),
+        git_backend=str(git.get("backend") or "auto").strip().lower(),
         subagents=dict(data.get("subagents") or {}),
         tool_approvals=list(data.get("tool_approvals") or []),
         context_window_tokens=int(compaction.get("context_window_tokens", 200_000)),

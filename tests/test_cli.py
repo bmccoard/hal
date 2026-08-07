@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from neo.agent import Agent
 from neo.cli import _save_live_session, main, run_chat, run_headless
+from neo.config import parse_config
 from neo.models import ContentBlock, Response, ToolSpec, Usage
 from neo.sessions import Session
 from neo.tools import Registry, Tool
@@ -127,3 +128,24 @@ def test_failed_session_save_keeps_live_state_for_retry() -> None:
     assert session.messages is messages
     assert session.usage is usage
     assert "disk unavailable" in error.getvalue()
+
+
+def test_doctor_accepts_dulwich_fallback_when_git_executable_is_missing(
+    monkeypatch, tmp_path,
+) -> None:
+    from dulwich import porcelain
+    from neo.cli import run_doctor
+
+    root = tmp_path / "repo"
+    porcelain.init(root)
+    config = parse_config({
+        "provider": "openrouter", "api_key": "placeholder",
+        "git": {"backend": "auto"},
+    })
+    monkeypatch.chdir(root)
+    monkeypatch.setattr("neo.cli.load_config", lambda: config)
+    monkeypatch.setattr("neo.git.shutil.which", lambda _name: None)
+    output = io.StringIO()
+
+    assert run_doctor(output) == 0
+    assert "pass\tgit\tdulwich backend available" in output.getvalue()

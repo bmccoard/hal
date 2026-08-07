@@ -13,6 +13,7 @@ from neo.tools import (
     GrepTool,
     ReadFileTool,
     WriteFileTool,
+    default_registry,
     shell_argv,
 )
 
@@ -132,3 +133,12 @@ def test_shell_cancellation_terminates_the_process_tree(tmp_path: Path) -> None:
         )
 
     assert time.monotonic() - started < 3
+
+
+def test_default_registry_exposes_structured_git_tools(tmp_path: Path) -> None:
+    names = {spec.name for spec in default_registry(
+        tmp_path, tmp_path, git_backend="dulwich",
+    ).specs}
+    assert {
+        "git_status", "git_diff", "git_log", "git_commit", "git_push",
+    } <= names

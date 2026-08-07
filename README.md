@@ -44,6 +44,9 @@ features:
 
 output:
   verbose: false
+
+git:
+  backend: auto
 ```
 
 ### Configuration support status
@@ -56,6 +59,7 @@ but changing them does not currently alter runtime behavior.
 | --- | --- | --- |
 | `features.agents_file` | Active | Loads applicable `AGENTS.md` files into the system prompt. |
 | `features.skills` | Active | Discovers skills and expands `$name` and `/name` invocations. |
+| `git.backend` | Active | Selects `auto`, `native`, or `dulwich`; `auto` prefers the Git executable and otherwise uses Dulwich. |
 | `compaction.context_window_tokens` | Reserved | Parsed and validated; transcript compaction is not implemented yet. |
 | `features.prompt_caching` | Reserved | Parsed; provider prompt-cache controls are not emitted yet. |
 | `output.verbose` | Reserved | Parsed; the Python REPL currently uses one fixed tool-activity view. |
@@ -142,7 +146,8 @@ accept seconds or an `s`, `m`, or `h` suffix, such as `30s` or `10m`.
 - **Interactive commands** are entered at the `neo>` prompt, such as `/help`,
   `/clear`, `/model`, and `/exit`.
 - **Tools** are executable capabilities available to the model: `bash`,
-  `read_file`, `write_file`, `edit_file`, `grep`, and `glob`.
+  `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `git_status`,
+  `git_diff`, `git_log`, `git_commit`, and `git_push`.
 - **Skills** are reusable instruction documents stored at
   `.neo/skills/<name>/SKILL.md`. They guide the model but do not execute code by
   themselves.
@@ -163,6 +168,34 @@ While a model turn or direct `!command` is active, Ctrl-C cancels that operation
 and returns to the `neo>` prompt. Neo completes any required cancelled/skipped
 tool results before saving the session, so resumed provider transcripts remain
 structurally valid. Ctrl-C while Neo is waiting at the prompt exits normally.
+
+### Git backends and check-ins
+
+Neo uses dedicated Git tools instead of requiring the model to construct shell
+commands. With the default `git.backend: auto`, Neo uses the installed `git`
+executable when available and falls back to the required
+[Dulwich Python implementation](https://www.dulwich.io/getting-started/) when it is
+not. Force one implementation when troubleshooting or
+testing parity:
+
+```yaml
+git:
+  backend: dulwich  # auto, native, or dulwich
+```
+
+Asking Neo to "check in" or "commit" changes authorizes one **local commit**. Neo
+must inspect status/diffs first, pass an explicit list of intended paths to
+`git_commit`, and report the resulting commit ID. The commit tool refuses to include
+already-staged files outside that list. It never pushes. Remote changes require a
+separate explicit request such as "push this commit", which uses `git_push`.
+
+Dulwich supports local status, diff, log, staging, commits, and pushes without a Git
+binary. Native Git remains preferred because it inherits the machine's credential
+manager, SSH agent, hooks, signing configuration, and other installation-specific
+behavior. Dulwich pushes use Dulwich's own transport and may require separately
+available HTTPS or SSH credentials. Both backends read the repository's configured
+author identity; set `user.name` and `user.email` (or the corresponding Git author
+environment variables) before committing.
 
 ### Skills
 
@@ -215,8 +248,8 @@ project's actual commands, architecture, safety rules, and delivery policy. The
 example suffix is intentional: it demonstrates the convention without changing
 this repository's active agent instructions.
 
-The model can call `bash`, `read_file`, `write_file`, `edit_file`, `grep`, and
-`glob`. Like the Go implementation, Neo is not a security sandbox. Run it inside
+The model can call the coding and Git tools listed above. Like the Go
+implementation, Neo is not a security sandbox. Run it inside
 an environment whose filesystem, process, network, and credential access match
 your trust requirements. `tool_approvals` adds optional interactive confirmation
 for exact tool names and shell-command prefixes; it is user-interface friction,
@@ -232,6 +265,8 @@ tool_approvals:
   - py -m pip
   - write_file
   - edit_file
+  - git_commit
+  - git_push
 ```
 
 Matching is literal. It does not detect every wrapper, alias, shell chain, or

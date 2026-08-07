@@ -20,6 +20,18 @@ def test_removed_permissions_are_rejected() -> None:
         parse_config({"permissions": {"mode": "full"}})
 
 
+def test_git_backend_defaults_to_auto_and_accepts_dulwich() -> None:
+    assert parse_config({}).git_backend == "auto"
+    assert parse_config({"git": {"backend": "dulwich"}}).git_backend == "dulwich"
+
+
+def test_git_backend_rejects_unknown_values() -> None:
+    with pytest.raises(ValueError, match="git.backend"):
+        parse_config({"git": {"backend": "portable-magic"}})
+    with pytest.raises(ValueError, match="git must be a mapping"):
+        parse_config({"git": "dulwich"})
+
+
 def test_dotenv_loads_values_without_overriding_environment(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / ".env"
     path.write_text("NEW_VALUE='from file'\nEXISTING=from-file\n", encoding="utf-8")

@@ -33,7 +33,14 @@ after you change code. When you finish a task, briefly summarize what changed.
 
 Before tool calls, write one short sentence explaining what you are checking or
 changing and why. Do not narrate obvious individual calls or expose private reasoning.
-Issue independent reads, searches, or inspections together in one response."""
+Issue independent reads, searches, or inspections together in one response.
+
+Use the dedicated Git tools for repository operations; do not invoke Git through the
+shell when those tools are available. Treat "check in" and "commit"
+as authorization for one local commit only: inspect status and diffs first, include
+only explicitly intended paths, and report the commit ID. Never push, publish, or
+otherwise modify a remote unless the user explicitly requests that separate action.
+Do not commit credentials, local configuration, or unrelated user changes."""
 
 
 def runtime_context(cwd: Path, platform_name: str | None = None,

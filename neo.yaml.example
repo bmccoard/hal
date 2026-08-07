@@ -4,6 +4,12 @@
 provider: openrouter
 model: openai/gpt-4o-mini
 
+# Git operations prefer the installed git executable and fall back to the
+# bundled pure-Python Dulwich backend. Set this to native or dulwich to require
+# one backend explicitly.
+git:
+  backend: auto
+
 # Optional interactive confirmations. These are user-interface friction, not a
 # security boundary, and literal prefixes do not detect every indirect command.
 # tool_approvals:
@@ -12,6 +18,8 @@ model: openai/gpt-4o-mini
 #   - py -m pip
 #   - write_file
 #   - edit_file
+#   - git_commit
+#   - git_push
 
 # Reserved configuration: parsed and validated, but transcript compaction is
 # not implemented in the Python port yet. This currently has no runtime effect.

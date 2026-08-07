@@ -435,9 +435,15 @@ class Registry:
 
 
 def default_registry(cwd: Path, root: Path | None = None, approvals: list[str] | None = None,
-                     confirm: Callable[[str], bool] | None = None) -> Registry:
+                     confirm: Callable[[str], bool] | None = None,
+                     git_backend: str = "auto") -> Registry:
     root = (root or workspace_root(cwd)).resolve()
-    return Registry([BashTool(cwd), ReadFileTool(), WriteFileTool(), EditFileTool(), GrepTool(root), GlobTool(root)], approvals, confirm)
+    from .git_tools import git_tools
+
+    return Registry([
+        BashTool(cwd), ReadFileTool(), WriteFileTool(), EditFileTool(),
+        GrepTool(root), GlobTool(root), *git_tools(root, git_backend),
+    ], approvals, confirm)
 
 
 def workspace_root(cwd: Path) -> Path:
