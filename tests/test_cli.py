@@ -4,10 +4,10 @@ import signal
 from types import SimpleNamespace
 
 from hal.agent import Agent
-from hal.cli import _save_live_session, main, run_chat, run_headless
+from hal.cli import _save_live_session, main, run_chat, run_headless, run_sessions
 from hal.config import parse_config
 from hal.models import ContentBlock, Response, ToolSpec, Usage
-from hal.sessions import Session
+from hal.sessions import Metadata, Session, SessionStore
 from hal.tools import Registry, Tool
 
 
@@ -128,6 +128,67 @@ def test_failed_session_save_keeps_live_state_for_retry() -> None:
     assert session.messages is messages
     assert session.usage is usage
     assert "disk unavailable" in error.getvalue()
+
+
+def test_session_list_is_compact_by_default_and_verbose_on_request(
+    monkeypatch, tmp_path,
+) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    store.create(Metadata(
+        id="sess_ae5f63c2dd8b4abd", cwd=str(tmp_path / "my-project"),
+        model="poolside/laguna-s-2.1:free", provider="openrouter",
+    ))
+    monkeypatch.setattr("hal.cli.SessionStore", lambda: store)
+    compact, verbose = io.StringIO(), io.StringIO()
+
+    assert run_sessions([], compact, io.StringIO()) == 0
+    assert run_sessions(["--verbose"], verbose, io.StringIO()) == 0
+
+    assert "SHORT\tID\tUPDATED\tMODEL\tPROJECT" in compact.getvalue()
+    assert "ae5f63c2\tsess_ae5f63c2dd8b4abd" in compact.getvalue()
+    assert "laguna-s-2.1:free\tmy-project" in compact.getvalue()
+    assert "PROVIDER\tMODEL\tCWD\tTITLE" in verbose.getvalue()
+    assert "openrouter\tpoolside/laguna-s-2.1:free" in verbose.getvalue()
+
+
+def test_interactive_sessions_show_current_id_and_resume_by_short_selector(
+    monkeypatch, tmp_path,
+) -> None:
+    first_dir = tmp_path / "first"; second_dir = tmp_path / "second"
+    first_dir.mkdir(); second_dir.mkdir()
+    store = SessionStore(tmp_path / "sessions")
+    first = store.create(Metadata(
+        id="sess_aaaaaaaa11111111", cwd=str(first_dir), model="first-model", provider="fake",
+    ))
+    second = store.create(Metadata(
+        id="sess_bbbbbbbb22222222", cwd=str(second_dir), model="second-model", provider="fake",
+    ))
+    agents = []
+
+    def make_agent(_config, _cwd, session=None, **_kwargs):
+        agent = SimpleNamespace(
+            messages=session.messages if session else [],
+            usage=session.usage if session else Usage(), model=session.metadata.model if session else "model",
+        )
+        agents.append(agent)
+        return agent, [], {}
+
+    inputs = iter(["/sessions", "/resume bbbbbbbb", "/exit"])
+    monkeypatch.setattr("hal.cli.SessionStore", lambda: store)
+    monkeypatch.setattr(
+        "hal.cli.load_config",
+        lambda _cwd: SimpleNamespace(provider="fake", model="model", openai_auth="api_key"),
+    )
+    monkeypatch.setattr("hal.cli._make_agent", make_agent)
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
+    output, error = io.StringIO(), io.StringIO()
+
+    assert run_chat(output, error, first.metadata.id) == 0
+
+    assert f"Current: aaaaaaaa ({first.metadata.id})" in output.getvalue()
+    assert f"Resumed bbbbbbbb ({second.metadata.id})" in output.getvalue()
+    assert not error.getvalue()
+    assert len(agents) == 2
 
 
 def test_doctor_accepts_dulwich_fallback_when_git_executable_is_missing(

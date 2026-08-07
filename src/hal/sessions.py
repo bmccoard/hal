@@ -48,15 +48,37 @@ class SessionStore:
         metadata.created_at = metadata.created_at or now; metadata.updated_at = metadata.updated_at or now
         session = Session(metadata); self.save(session); return session
 
-    def load(self, session_id: str) -> Session:
-        if not session_id.strip() or "/" in session_id or "\\" in session_id:
-            raise ValueError(f"invalid session id {session_id!r}")
-        path = self.directory / f"{session_id}.json"
-        if not path.is_file() and self.legacy_directory is not None:
-            path = self.legacy_directory / f"{session_id}.json"
-        if not path.is_file(): raise FileNotFoundError(f"session not found: {session_id}")
+    def load(self, selector: str) -> Session:
+        selector = selector.strip()
+        if not selector or "/" in selector or "\\" in selector:
+            raise ValueError(f"invalid session selector {selector!r}")
+        session_id = selector
+        path = self._find_session_path(session_id)
+        if path is None:
+            session_id = self.resolve_id(selector)
+            path = self._find_session_path(session_id)
+        if path is None: raise FileNotFoundError(f"session not found: {selector}")
         data = json.loads(path.read_text(encoding="utf-8")); meta = data.get("metadata") or {}
         return Session(Metadata(**{k: v for k, v in meta.items() if k in Metadata.__dataclass_fields__}), [Message.from_dict(x) for x in data.get("messages", [])], Usage(**data.get("usage", {})))
+
+    def resolve_id(self, selector: str) -> str:
+        """Resolve a full ID or a unique prefix without relying on list order."""
+        value = selector.strip()
+        if not value or "/" in value or "\\" in value:
+            raise ValueError(f"invalid session selector {selector!r}")
+        short = value.removeprefix("sess_")
+        if len(short) < 4:
+            raise ValueError("session selector must contain at least 4 ID characters")
+        matches = [
+            item.id for item in self.list()
+            if item.id == value or item.id.removeprefix("sess_").startswith(short)
+        ]
+        if not matches:
+            raise FileNotFoundError(f"session not found: {selector}")
+        if len(matches) > 1:
+            choices = ", ".join(short_session_id(item) for item in matches[:5])
+            raise ValueError(f"ambiguous session selector {selector!r}; use more characters ({choices})")
+        return matches[0]
 
     def save(self, session: Session) -> None:
         meta = session.metadata; meta.id = meta.id or f"sess_{secrets.token_hex(8)}"; meta.created_at = meta.created_at or _now(); meta.updated_at = _now()
@@ -100,6 +122,16 @@ class SessionStore:
         if not path.is_file(): return {"sessions": []}
         return json.loads(path.read_text(encoding="utf-8"))
 
+    def _find_session_path(self, session_id: str) -> Path | None:
+        path = self.directory / f"{session_id}.json"
+        if path.is_file():
+            return path
+        if self.legacy_directory is not None:
+            legacy_path = self.legacy_directory / f"{session_id}.json"
+            if legacy_path.is_file():
+                return legacy_path
+        return None
+
     @staticmethod
     def _atomic(path: Path, value: dict) -> None:
         fd, temp_name = tempfile.mkstemp(prefix=path.name + ".", dir=path.parent)
@@ -118,6 +150,11 @@ def title_from_messages(messages: list[Message]) -> str:
         if text:
             clean = " ".join(text.split()); return clean if len(clean) <= 80 else clean[:79].rstrip() + "…"
     return ""
+
+
+def short_session_id(session_id: str, length: int = 8) -> str:
+    """Return the stable, human-sized portion used as a session selector."""
+    return session_id.removeprefix("sess_")[:length]
 
 
 def transcript_text(messages: list[Message]) -> str:

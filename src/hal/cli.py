@@ -15,7 +15,7 @@ from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
 from .git import GitError, create_git_backend
 from .providers import ProviderError, create_provider
-from .sessions import Metadata, Session, SessionStore
+from .sessions import Metadata, Session, SessionStore, short_session_id
 from .tools import BashTool, default_registry, workspace_root
 
 
@@ -26,11 +26,12 @@ USAGE:
   hal chat           Interactive chat mode (explicit)
   hal run [options] <prompt>
                      Run one headless prompt and exit
-  hal sessions       List saved chat sessions
+  hal sessions [-v]  List saved chat sessions
   hal sessions search <query>
                      Search saved session transcripts
   hal doctor         Check local config and environment
-  hal resume <id>    Resume a saved chat session
+  hal resume <selector>
+                     Resume by full ID or unique short selector
   hal version        Show the HAL version (also -v, --version)
   hal help           Show this help
 
@@ -133,22 +134,52 @@ def _short(path: str) -> str:
     except (OSError, ValueError): return path
 
 
+def _project_name(path: str) -> str:
+    value = path.rstrip("/\\").replace("\\", "/")
+    return value.rsplit("/", 1)[-1] if value else "-"
+
+
+def _model_name(model: str) -> str:
+    return model.rsplit("/", 1)[-1] if model else "-"
+
+
+def _print_sessions(items: list[Metadata], stdout: TextIO, *, verbose: bool = False,
+                    current_id: str = "") -> None:
+    if current_id:
+        print(f"Current: {short_session_id(current_id)} ({current_id})", file=stdout)
+    if verbose:
+        print("SHORT\tID\tUPDATED\tPROVIDER\tMODEL\tCWD\tTITLE", file=stdout)
+        for item in items:
+            print(
+                f"{short_session_id(item.id)}\t{item.id}\t{item.updated_at[:16].replace('T', ' ')}\t"
+                f"{item.provider or '-'}\t{item.model or '-'}\t{_short(item.cwd)}\t{item.title or '(untitled)'}",
+                file=stdout,
+            )
+        return
+    print("SHORT\tID\tUPDATED\tMODEL\tPROJECT", file=stdout)
+    for item in items:
+        print(
+            f"{short_session_id(item.id)}\t{item.id}\t{item.updated_at[:16].replace('T', ' ')}\t"
+            f"{_model_name(item.model)}\t{_project_name(item.cwd)}",
+            file=stdout,
+        )
+
+
 def run_sessions(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
     store = SessionStore()
     try:
-        if not args:
+        if not args or args in (["-v"], ["--verbose"]):
             items = store.list()
             if not items: print("no saved sessions", file=stdout); return 0
-            print("ID\tUPDATED\tMODEL\tCWD\tTITLE", file=stdout)
-            for x in items: print(f"{x.id}\t{x.updated_at[:16].replace('T', ' ')}\t{x.model}\t{_short(x.cwd)}\t{x.title or '(untitled)'}", file=stdout)
+            _print_sessions(items, stdout, verbose=bool(args))
             return 0
         if args[0] == "search" and len(args) >= 2:
             results = store.search(" ".join(args[1:]))
             if not results: print("no matching sessions", file=stdout); return 0
-            print("ID\tUPDATED\tMODEL\tCWD\tTITLE\tMATCH", file=stdout)
-            for x, excerpt in results: print(f"{x.id}\t{x.updated_at[:16].replace('T', ' ')}\t{x.model}\t{_short(x.cwd)}\t{x.title or '(untitled)'}\t{excerpt}", file=stdout)
+            print("SHORT\tID\tUPDATED\tMODEL\tPROJECT\tTITLE\tMATCH", file=stdout)
+            for x, excerpt in results: print(f"{short_session_id(x.id)}\t{x.id}\t{x.updated_at[:16].replace('T', ' ')}\t{_model_name(x.model)}\t{_project_name(x.cwd)}\t{x.title or '(untitled)'}\t{excerpt}", file=stdout)
             return 0
-        print("usage: hal sessions [search <query>]", file=stderr); return 2
+        print("usage: hal sessions [-v|--verbose] | hal sessions search <query>", file=stderr); return 2
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"sessions: {exc}", file=stderr); return 1
 
@@ -211,7 +242,44 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
             if text in {"/exit", "/quit"}: break
             if text == "/help":
                 names = ", ".join(f"/{x}" for x in phases) + (", " + ", ".join(f"/{x.name}" for x in skills) if skills else "")
-                print(f"Commands: /help, /clear, /model <id>, /exit; phases/skills: {names}", file=stdout); continue
+                print(f"Commands: /help, /sessions [-v], /resume <short-id>, /clear, /model <id>, /exit; phases/skills: {names}", file=stdout); continue
+            if text == "/sessions" or text in {"/sessions -v", "/sessions --verbose"}:
+                try:
+                    items = store.list()
+                    if not items: print("no saved sessions", file=stdout)
+                    else: _print_sessions(items, stdout, verbose=text != "/sessions", current_id=session.metadata.id)
+                except (OSError, ValueError, json.JSONDecodeError) as exc:
+                    print(f"sessions: {exc}", file=stderr)
+                continue
+            if text == "/resume" or text.startswith("/resume "):
+                selector = text[7:].strip()
+                if not selector:
+                    print("usage: /resume <short-id-or-full-id>", file=stderr); continue
+                try:
+                    target = store.load(selector)
+                    if target.metadata.id == session.metadata.id:
+                        print(f"Already using {short_session_id(session.metadata.id)} ({session.metadata.id}).", file=stdout); continue
+                    if not _save_live_session(store, session, agent, stderr): continue
+                    saved = Path(target.metadata.cwd)
+                    target_cwd = saved if saved.is_dir() else cwd
+                    target_cfg = load_config(target_cwd)
+                    if target.metadata.provider and target.metadata.model:
+                        target_cfg.provider = target.metadata.provider.replace("openai-codex", "openai")
+                        target_cfg.model = target.metadata.model
+                    target_agent, target_skills, target_phases = _make_agent(
+                        target_cfg, target_cwd, target, interactive=True, out=stdout, err=stderr,
+                    )
+                    if saved.is_dir(): os.chdir(saved)
+                    else: print(f"warning: saved working directory is unavailable: {saved}", file=stderr)
+                    session, cwd, cfg = target, target_cwd, target_cfg
+                    agent, skills, phases = target_agent, target_skills, target_phases
+                    print(
+                        f"Resumed {short_session_id(session.metadata.id)} ({session.metadata.id}) · "
+                        f"{cfg.provider}/{cfg.model} · {cwd}", file=stdout,
+                    )
+                except (GitError, ProviderError, OSError, ValueError, json.JSONDecodeError) as exc:
+                    print(f"resume: {exc}", file=stderr)
+                continue
             if text == "/clear": agent.messages.clear(); agent.usage = type(agent.usage)(); print("Conversation cleared.", file=stdout); continue
             if text.startswith("/model "): agent.model = text[7:].strip(); session.metadata.model = agent.model; print(f"Model: {agent.model}", file=stdout); continue
             if text.startswith("!"):
@@ -264,7 +332,7 @@ def main(argv: list[str] | None = None, stdin: TextIO = sys.stdin, stdout: TextI
     if command == "sessions": return run_sessions(rest, stdout, stderr)
     if command == "doctor": return run_doctor(stdout)
     if command == "resume":
-        if not rest: print("usage: hal resume <session-id>", file=stderr); return 2
+        if not rest: print("usage: hal resume <short-id-or-full-id>", file=stderr); return 2
         return run_chat(stdout, stderr, rest[0])
     if command in {"version", "-v", "--version"}: print(f"hal version {__version__}", file=stdout); return 0
     if command in {"help", "-h", "--help"}: print(USAGE, file=stdout); return 0

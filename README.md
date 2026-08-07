@@ -127,9 +127,10 @@ These are operating-system shell commands, not model tools or skills:
 | `hal` | Starts an interactive conversation and saves it as a session. |
 | `hal run "..."` | Runs one prompt and exits without creating a session. |
 | `hal run --json "..."` | Runs one headless prompt and returns JSON containing status, timing, tool counts, and the final answer. |
-| `hal sessions` | Lists locally saved interactive sessions from `~/.hal/sessions/`. |
+| `hal sessions` | Lists saved sessions in a compact view with short selectors. |
+| `hal sessions --verbose` | Lists full provider, model, path, and title details. |
 | `hal sessions search parser` | Searches saved transcripts for `parser`. |
-| `hal resume <id>` | Continues a saved interactive session, including its messages, model, usage, and working directory. |
+| `hal resume ae5f63c2` | Continues a saved session using its short selector or full ID. |
 | `hal doctor` | Checks configuration, credentials, model, session storage, Git, and workspace status without contacting the model. |
 
 `hal run "run tests"` asks the model to run tests; it does not execute a fixed
@@ -146,7 +147,7 @@ accept seconds or an `s`, `m`, or `h` suffix, such as `30s` or `10m`.
 - **CLI commands** are entered in the operating-system shell, such as `hal run`
   and `hal doctor`.
 - **Interactive commands** are entered at the `hal>` prompt, such as `/help`,
-  `/clear`, `/model`, and `/exit`.
+  `/sessions`, `/resume`, `/clear`, `/model`, and `/exit`.
 - **Tools** are executable capabilities available to the model: `bash`,
   `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `git_status`,
   `git_diff`, `git_log`, `git_commit`, and `git_push`.
@@ -162,9 +163,25 @@ and falls back to `cmd.exe` only when neither is available. On Unix-like systems
 it uses Bash and falls back to `/bin/sh`. Interactive `!command` uses the same
 selection. Write commands in the syntax of the shell installed on the machine.
 
-Interactive mode supports `/help`, `/clear`, `/model <id>`, `/exit`, the built-in
-`/design`, `/plan`, `/build`, and `/review` phases, discovered skill commands,
-and `!command` for a direct local shell command.
+Interactive mode supports `/help`, `/sessions`, `/sessions --verbose`,
+`/resume <selector>`, `/clear`, `/model <id>`, `/exit`, the built-in `/design`,
+`/plan`, `/build`, and `/review` phases, discovered skill commands, and
+`!command` for a direct local shell command.
+
+Session listings use these compact columns by default:
+
+```text
+SHORT     ID                         UPDATED           MODEL                PROJECT
+ae5f63c2  sess_ae5f63c2dd8b4abd    2026-08-07 16:44  laguna-s-2.1:free    neo-py
+```
+
+The eight-character `SHORT` value is a stable prefix of the random session ID,
+not a position in the changing list. Use it with `hal resume ae5f63c2` or, from
+inside HAL, `/resume ae5f63c2`. A unique prefix of four or more characters also
+works; HAL rejects ambiguous prefixes and asks for more characters. `/sessions`
+prints the exact active session before its table, and `/resume` switches sessions
+without exiting. The full `sess_...` ID remains accepted. `!` stays reserved for
+direct shell commands.
 
 While a model turn or direct `!command` is active, Ctrl-C cancels that operation
 and returns to the `hal>` prompt. HAL completes any required cancelled/skipped
