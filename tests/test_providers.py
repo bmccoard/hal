@@ -1,3 +1,10 @@
+import io
+import time
+import urllib.error
+
+import pytest
+
+from neo.cancellation import CancelledError, CancellationToken
 from neo.config import parse_config
 from neo.models import Message, ContentBlock, Request
 from neo.providers import OpenAICompatibleProvider, OpenRouterProvider, create_provider
@@ -18,7 +25,7 @@ def test_custom_openai_profile_uses_chat_completions_endpoint(monkeypatch) -> No
     assert provider.endpoint == "https://example.test/openai/v1/chat/completions"
 
     captured = {}
-    def fake_post(url, payload, headers):
+    def fake_post(url, payload, headers, cancellation=None):
         captured.update(url=url, payload=payload, headers=headers)
         return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}
     monkeypatch.setattr(provider, "_post", fake_post)
@@ -55,7 +62,7 @@ def test_custom_profile_sends_max_completion_tokens(monkeypatch) -> None:
     provider = create_provider(config)
     captured = {}
 
-    def fake_post(url, payload, headers):
+    def fake_post(url, payload, headers, cancellation=None):
         captured.update(payload)
         return {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}
 
@@ -98,3 +105,19 @@ def test_chat_completions_normalizes_tool_calls(monkeypatch) -> None:
 
     assert response.stop_reason == "tool_use"
     assert response.content[0].name == "read_file"
+
+
+def test_retry_after_wait_respects_cancellation_deadline(monkeypatch) -> None:
+    provider = OpenRouterProvider("placeholder")
+    error = urllib.error.HTTPError(
+        provider.endpoint, 429, "busy", {"Retry-After": "30"}, io.BytesIO(b"busy"),
+    )
+    monkeypatch.setattr("neo.providers.urllib.request.urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    started = time.monotonic()
+
+    with pytest.raises(CancelledError, match="timed out"):
+        provider._post(
+            provider.endpoint, {}, {}, CancellationToken.with_timeout(.01),
+        )
+
+    assert time.monotonic() - started < 1

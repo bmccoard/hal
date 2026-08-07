@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass, field
+from enum import Enum
+import time
 from typing import NoReturn
 
+from .cancellation import CancelledError, CancellationToken, cancellation_or_default
 from .models import ContentBlock, Message, Request, Usage
 from .providers import Provider
 from .tools import MAX_RESULT, Registry
@@ -32,7 +36,40 @@ class MaxTurnsError(AgentError):
     pass
 
 
-EventHandler = Callable[[str, dict[str, object]], None]
+class EventKind(str, Enum):
+    ASSISTANT_TEXT = "assistant_text"
+    ASSISTANT_COMMENTARY = "assistant_commentary"
+    PARALLEL_START = "parallel_start"
+    TOOL_CALL = "tool_call"
+    TOOL_RESULT = "tool_result"
+    STEERING_APPLIED = "steering_applied"
+    DONE = "done"
+    ERROR = "error"
+    MAX_TURNS_REACHED = "max_turns_reached"
+
+
+@dataclass(slots=True)
+class Event:
+    """Structured activity emitted by an agent turn.
+
+    ``elapsed_ms`` is measured from the start of ``send``. ``duration_ms`` is
+    populated for completed operations such as tool calls.
+    """
+
+    kind: EventKind
+    text: str = ""
+    name: str = ""
+    args: dict[str, object] = field(default_factory=dict)
+    tool_use_id: str = ""
+    is_error: bool = False
+    elapsed_ms: int = 0
+    duration_ms: int = 0
+    max_turns: int = 0
+    error: BaseException | None = None
+    partial_text: str = ""
+
+
+EventHandler = Callable[[Event], None]
 
 _KNOWN_STOP_REASONS = {
     "", "end_turn", "stop_sequence", "tool_use", "max_tokens", "length",
@@ -53,27 +90,38 @@ class Agent:
         self.messages = list(messages or [])
         self.usage = usage or Usage()
         self.max_turns = max_turns
-        self.on_event = on_event or (lambda _kind, _data: None)
+        self.on_event = on_event or (lambda _event: None)
+        self._send_started = 0.0
 
-    def send(self, text: str, display_text: str = "") -> str:
+    def send(self, text: str, display_text: str = "",
+             cancellation: CancellationToken | None = None) -> str:
         if not text.strip():
             raise AgentError("message is empty")
+        cancellation = cancellation_or_default(cancellation)
+        self._send_started = time.monotonic()
         self.messages.append(Message("user", [ContentBlock("text", text=text)], display_text=display_text))
         final_parts: list[str] = []
         for _ in range(self.max_turns):
-            response = self.provider.complete(Request(
-                model=self.model, system=self.system, messages=list(self.messages),
-                tools=self.tools.specs,
-            ))
+            try:
+                cancellation.raise_if_cancelled()
+                response = self.provider.complete(Request(
+                    model=self.model, system=self.system, messages=list(self.messages),
+                    tools=self.tools.specs,
+                ), cancellation)
+                cancellation.raise_if_cancelled()
+            except Exception as exc:
+                self._emit(Event(EventKind.ERROR, error=exc))
+                raise
             self.usage.add(response.usage)
             assistant_blocks = response.content
-            response_text = "".join(
-                block.text for block in assistant_blocks
-                if block.type == "text" and block.text
-            )
-            if response_text:
-                final_parts.append(response_text)
-                self.on_event("assistant", {"text": response_text})
+            for block in assistant_blocks:
+                if not block.text:
+                    continue
+                if block.type == "text":
+                    final_parts.append(block.text)
+                    self._emit(Event(EventKind.ASSISTANT_TEXT, text=block.text))
+                elif block.type == "commentary":
+                    self._emit(Event(EventKind.ASSISTANT_COMMENTARY, text=block.text))
             partial = "\n".join(final_parts).strip()
             calls = [block for block in assistant_blocks if block.type == "tool_use"]
 
@@ -85,7 +133,7 @@ class Agent:
 
             if response.stop_reason == "refusal":
                 self._append_safe_assistant(assistant_blocks)
-                self.on_event("done", {})
+                self._emit(Event(EventKind.DONE))
                 return partial
 
             if response.stop_reason == "model_context_window_exceeded":
@@ -97,7 +145,7 @@ class Agent:
             if not calls:
                 self.messages.append(Message("assistant", assistant_blocks))
                 if response.stop_reason in {"", "end_turn", "stop_sequence"}:
-                    self.on_event("done", {})
+                    self._emit(Event(EventKind.DONE))
                     return partial
                 if response.stop_reason in {"max_tokens", "length"}:
                     self._fail(MaxOutputTokensError(
@@ -112,25 +160,53 @@ class Agent:
             # matching result. If execution is interrupted by a BaseException,
             # neither side is committed and the stored transcript stays valid.
             results: list[ContentBlock] = []
+            cancelled: CancelledError | None = None
             for call in calls:
-                self.on_event("tool_call", {"name": call.name, "input": call.input})
-                error = False
-                try:
-                    output = self.tools.run(call.name, call.input)
-                except Exception as exc:
-                    error = True
-                    output = str(exc)
+                self._emit(Event(
+                    EventKind.TOOL_CALL, name=call.name, args=dict(call.input),
+                    tool_use_id=call.id,
+                ))
+                tool_started = time.monotonic()
+                error = cancelled is not None
+                if cancelled is not None:
+                    output = "skipped because the agent turn was cancelled"
+                else:
+                    try:
+                        cancellation.raise_if_cancelled()
+                        output = self.tools.run(call.name, call.input, cancellation)
+                    except CancelledError as exc:
+                        cancelled = exc
+                        error = True
+                        output = str(exc)
+                    except Exception as exc:
+                        error = True
+                        output = str(exc)
                 output = output.encode("utf-8", "replace")[:MAX_RESULT].decode("utf-8", "replace")
                 results.append(ContentBlock("tool_result", tool_use_id=call.id, content=output, is_error=error))
-                self.on_event("tool_result", {"name": call.name, "content": output, "is_error": error})
+                self._emit(Event(
+                    EventKind.TOOL_RESULT, text=output, name=call.name,
+                    tool_use_id=call.id, is_error=error,
+                    duration_ms=int((time.monotonic() - tool_started) * 1000),
+                ))
             self.messages.append(Message("assistant", assistant_blocks))
             self.messages.append(Message("user", results))
+            if cancelled is not None:
+                self._emit(Event(EventKind.ERROR, text=str(cancelled), error=cancelled))
+                raise cancelled
         partial = "\n".join(final_parts).strip()
         error = MaxTurnsError(
             f"agent exceeded maximum of {self.max_turns} provider turns", partial
         )
-        self.on_event("max_turns_reached", {"max_turns": self.max_turns, "error": error})
+        self._emit(Event(
+            EventKind.MAX_TURNS_REACHED, max_turns=self.max_turns,
+            error=error, partial_text=partial,
+        ))
         raise error
+
+    def _emit(self, event: Event) -> None:
+        if self._send_started:
+            event.elapsed_ms = int((time.monotonic() - self._send_started) * 1000)
+        self.on_event(event)
 
     def _append_safe_assistant(self, blocks: list[ContentBlock]) -> None:
         safe = [block for block in blocks if block.type != "tool_use"]
@@ -138,9 +214,8 @@ class Agent:
             self.messages.append(Message("assistant", safe))
 
     def _fail(self, error: AgentError) -> NoReturn:
-        self.on_event("error", {
-            "error": error,
-            "message": str(error),
-            "partial_text": error.partial_text,
-        })
+        self._emit(Event(
+            EventKind.ERROR, text=str(error), error=error,
+            partial_text=error.partial_text,
+        ))
         raise error

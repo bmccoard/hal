@@ -6,7 +6,7 @@
 | Target | `neo-py` |
 | Last reviewed | 2026-08-06 |
 | Current milestone | Phase 1 - core correctness and safety |
-| Next work | Cancellation-aware provider/tool interfaces and richer events |
+| Next work | Interactive signal handling and safe session persistence on cancellation |
 
 Audit basis: compared `neo-py` with the Go `neo` tree and its developer docs on
 2026-08-06. The Python port has the basic provider-neutral loop, four API-key
@@ -34,15 +34,21 @@ tests, or documentation recorded in the implementation log.
 - [ ] Introduce cancellation-aware provider and tool interfaces plus a richer event
   model (assistant text/commentary, tool call/result, parallel group, steering,
   max-turn, error, and done events with timing and call identity).
+  - [x] Replace string/dictionary callbacks with typed events carrying tool-call
+    identity, elapsed/duration timing, structured errors, and distinct assistant text
+    and commentary kinds. Reserve parallel and steering kinds for their later phases.
+  - [x] Thread a cancellation/deadline object through the agent, providers, registry,
+    tool and approval boundaries, retry waits, and the headless CLI. Provider reads
+    are deadline-bounded and shell cancellation terminates the process tree.
 - [x] Enforce tool-turn transcript invariants atomically: commit an assistant tool
   request only after every matching result is ready; create explicit error results for
   unknown, denied, and failed calls; retain provider request order.
-- [ ] When cancellation is implemented, create matching cancelled/skipped results for
+- [x] When cancellation is implemented, create matching cancelled/skipped results for
   announced calls while keeping tool request/result pairs structurally valid.
 - [x] Match Go stop handling: support `end_turn`, `stop_sequence`, `tool_use`,
   `refusal`, `pause_turn`, `max_tokens`, and context-window exhaustion; fail once on
   unknown reasons; return partial text with typed truncation/max-turn errors.
-- [ ] Make `neo run --timeout` a true wall-clock deadline covering retries, provider
+- [x] Make `neo run --timeout` a true wall-clock deadline covering retries, provider
   calls, tools, and the complete agent loop rather than only shortening one HTTP call.
 - [ ] Add signal handling and cancellation propagation. Interrupt provider requests,
   shell process trees, searches, reads, and pending calls without corrupting history.
@@ -203,6 +209,8 @@ tests, or documentation recorded in the implementation log.
 | 2026-08-06 | Bounded and pageable `read_file` behavior | `src/neo/tools.py`, `tests/test_tools.py` | Full suite: 37 passed |
 | 2026-08-06 | Normalize Chat Completions `stop`, `length`, and tool-call finish reasons | `src/neo/providers.py`, `tests/test_providers.py` | Full suite: 39 passed |
 | 2026-08-06 | Add host/native-shell context, read-only action policy, dependency policy, approval guidance, and cross-shell tests | `src/neo/context.py`, `src/neo/tools.py`, `tests/test_context.py`, `tests/test_tools.py`, `README.md`, `neo.yaml.example` | Full suite: 44 passed |
+| 2026-08-07 | Add typed agent events with commentary/text separation, call identity, timing, and structured failures | `src/neo/agent.py`, `src/neo/cli.py`, `tests/test_agent.py` | Full suite: 45 passed; Windows help/version smoke passed |
+| 2026-08-07 | Propagate cooperative cancellation and deadlines through the core loop, provider I/O/retries, tools, and headless mode; preserve cancelled tool transcripts and terminate shell process trees | `src/neo/cancellation.py`, `src/neo/agent.py`, `src/neo/providers.py`, `src/neo/tools.py`, `src/neo/cli.py`, `tests/test_agent.py`, `tests/test_providers.py`, `tests/test_tools.py`, `tests/test_cli.py`, `README.md` | Full suite: 49 passed; compileall and Windows help/version/shell-cancellation smoke passed |
 
 ## Final parity gate
 

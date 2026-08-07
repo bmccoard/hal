@@ -130,6 +130,11 @@ These are operating-system shell commands, not model tools or skills:
 test command itself. The model normally fulfills that request with its shell
 tool.
 
+`neo run --timeout <duration>` applies one wall-clock deadline to the provider
+calls, retry waits, agent loop, and tool calls. When a shell command is active,
+Neo terminates its process tree before returning the timeout error. Durations
+accept seconds or an `s`, `m`, or `h` suffix, such as `30s` or `10m`.
+
 ### Commands, tools, skills, and phases
 
 - **CLI commands** are entered in the operating-system shell, such as `neo run`

@@ -3,13 +3,13 @@ from __future__ import annotations
 import json
 import os
 import random
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from abc import ABC, abstractmethod
 from typing import Any
 
+from .cancellation import CancellationToken, cancellation_or_default
 from .config import Config
 from .models import ContentBlock, Message, Request, Response, Usage
 
@@ -22,20 +22,28 @@ class Provider(ABC):
     name: str
 
     @abstractmethod
-    def complete(self, request: Request) -> Response: ...
+    def complete(self, request: Request,
+                 cancellation: CancellationToken | None = None) -> Response: ...
 
 
 class HTTPProvider(Provider):
     timeout = 300
     max_retries = 4
 
-    def _post(self, url: str, payload: dict[str, Any], headers: dict[str, str]) -> dict[str, Any]:
+    def _post(self, url: str, payload: dict[str, Any], headers: dict[str, str],
+              cancellation: CancellationToken | None = None) -> dict[str, Any]:
+        cancellation = cancellation_or_default(cancellation)
         body = json.dumps(payload).encode()
         for attempt in range(self.max_retries + 1):
+            cancellation.raise_if_cancelled()
             req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", **headers}, method="POST")
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as response:
-                    return json.loads(response.read())
+                with urllib.request.urlopen(
+                    req, timeout=cancellation.bounded_timeout(self.timeout),
+                ) as response:
+                    result = json.loads(response.read())
+                    cancellation.raise_if_cancelled()
+                    return result
             except urllib.error.HTTPError as exc:
                 detail = exc.read().decode("utf-8", "replace")
                 if exc.code not in {408, 409, 429} and exc.code < 500:
@@ -44,11 +52,11 @@ class HTTPProvider(Provider):
                     raise ProviderError(f"{self.name} {exc.code}: {detail}") from exc
                 retry_after = exc.headers.get("Retry-After")
                 delay = float(retry_after) if retry_after and retry_after.isdigit() else .5 * (2 ** attempt) + random.random() * .2
-                time.sleep(min(delay, 30))
+                cancellation.wait(min(delay, 30))
             except (OSError, TimeoutError) as exc:
                 if attempt == self.max_retries:
                     raise ProviderError(f"{self.name}: {exc}") from exc
-                time.sleep(.5 * (2 ** attempt) + random.random() * .2)
+                cancellation.wait(.5 * (2 ** attempt) + random.random() * .2)
         raise AssertionError("unreachable")
 
 
@@ -70,7 +78,8 @@ class AnthropicProvider(HTTPProvider):
     def __init__(self, api_key: str, endpoint: str = "https://api.anthropic.com/v1/messages") -> None:
         self.api_key, self.endpoint = api_key, endpoint
 
-    def complete(self, request: Request) -> Response:
+    def complete(self, request: Request,
+                 cancellation: CancellationToken | None = None) -> Response:
         messages = []
         for message in request.messages:
             blocks = [value for block in message.content if (value := _anthropic_block(block)) is not None]
@@ -80,7 +89,7 @@ class AnthropicProvider(HTTPProvider):
             "model": request.model, "system": request.system, "messages": messages,
             "tools": [{"name": x.name, "description": x.description, "input_schema": x.input_schema} for x in request.tools],
             "max_tokens": request.max_tokens,
-        }, {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"})
+        }, {"x-api-key": self.api_key, "anthropic-version": "2023-06-01"}, cancellation)
         if data.get("error"):
             raise ProviderError(f"anthropic: {data['error'].get('message', data['error'])}")
         usage = data.get("usage") or {}
@@ -120,13 +129,14 @@ class OpenAIProvider(HTTPProvider):
     def __init__(self, api_key: str, endpoint: str = "https://api.openai.com/v1/responses") -> None:
         self.api_key, self.endpoint = api_key, endpoint
 
-    def complete(self, request: Request) -> Response:
+    def complete(self, request: Request,
+                 cancellation: CancellationToken | None = None) -> Response:
         data = self._post(self.endpoint, {
             "model": request.model, "instructions": request.system, "input": _openai_input(request.messages),
             "tools": [{"type": "function", "name": x.name, "description": x.description, "parameters": x.input_schema} for x in request.tools],
             "tool_choice": "auto", "max_output_tokens": request.max_tokens, "store": False,
             "include": ["reasoning.encrypted_content"],
-        }, {"Authorization": f"Bearer {self.api_key}"})
+        }, {"Authorization": f"Bearer {self.api_key}"}, cancellation)
         if data.get("error"):
             raise ProviderError(f"openai: {data['error'].get('message', data['error'])}")
         blocks: list[ContentBlock] = []
@@ -184,14 +194,18 @@ class OpenRouterProvider(HTTPProvider):
         self.api_key, self.endpoint = api_key, endpoint
         self.max_tokens_parameter = max_tokens_parameter
 
-    def complete(self, request: Request) -> Response:
+    def complete(self, request: Request,
+                 cancellation: CancellationToken | None = None) -> Response:
         messages = [{"role": "system", "content": request.system}, *_chat_messages(request.messages)]
         payload = {
             "model": request.model, "messages": messages,
             "tools": [{"type": "function", "function": {"name": x.name, "description": x.description, "parameters": x.input_schema}} for x in request.tools],
             self.max_tokens_parameter: request.max_tokens,
         }
-        data = self._post(self.endpoint, payload, {"Authorization": f"Bearer {self.api_key}"})
+        data = self._post(
+            self.endpoint, payload, {"Authorization": f"Bearer {self.api_key}"},
+            cancellation,
+        )
         if data.get("error"):
             raise ProviderError(f"openrouter: {data['error'].get('message', data['error'])}")
         choice = (data.get("choices") or [{}])[0]; message = choice.get("message") or {}
@@ -224,7 +238,8 @@ class GoogleProvider(HTTPProvider):
     def __init__(self, api_key: str, endpoint: str = "https://generativelanguage.googleapis.com/v1beta/models") -> None:
         self.api_key, self.endpoint = api_key, endpoint
 
-    def complete(self, request: Request) -> Response:
+    def complete(self, request: Request,
+                 cancellation: CancellationToken | None = None) -> Response:
         tool_names: dict[str, str] = {}
         contents = []
         for message in request.messages:
@@ -242,7 +257,7 @@ class GoogleProvider(HTTPProvider):
             "systemInstruction": {"parts": [{"text": request.system}]}, "contents": contents,
             "tools": [{"functionDeclarations": [{"name": x.name, "description": x.description, "parameters": x.input_schema} for x in request.tools]}],
             "generationConfig": {"maxOutputTokens": request.max_tokens},
-        }, {"x-goog-api-key": self.api_key})
+        }, {"x-goog-api-key": self.api_key}, cancellation)
         if data.get("error"): raise ProviderError(f"google: {data['error'].get('message', data['error'])}")
         candidates = data.get("candidates") or []
         if not candidates: raise ProviderError("google: no candidates returned")

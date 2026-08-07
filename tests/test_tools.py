@@ -1,9 +1,13 @@
 import os
 from pathlib import Path
+import sys
+import time
 
 import pytest
 
+from neo.cancellation import CancelledError, CancellationToken
 from neo.tools import (
+    BashTool,
     MAX_RESULT,
     EditFileTool,
     GrepTool,
@@ -116,3 +120,15 @@ def test_shell_has_platform_fallbacks(monkeypatch) -> None:
     monkeypatch.setenv("COMSPEC", "C:/Windows/System32/cmd.exe")
     assert shell_argv("dir", platform="nt") == ["C:/Windows/System32/cmd.exe", "/d", "/s", "/c", "dir"]
     assert shell_argv("ls", platform="posix") == ["/bin/sh", "-c", "ls"]
+
+
+def test_shell_cancellation_terminates_the_process_tree(tmp_path: Path) -> None:
+    command = f'"{sys.executable}" -c "import time; time.sleep(10)"'
+    started = time.monotonic()
+
+    with pytest.raises(CancelledError, match="timed out"):
+        BashTool(tmp_path).run(
+            {"command": command}, CancellationToken.with_timeout(.1),
+        )
+
+    assert time.monotonic() - started < 3

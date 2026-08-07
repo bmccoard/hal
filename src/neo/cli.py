@@ -12,7 +12,8 @@ from pathlib import Path
 from typing import TextIO
 
 from . import __version__
-from .agent import Agent
+from .agent import Agent, Event, EventKind
+from .cancellation import CancelledError, CancellationToken
 from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
 from .providers import ProviderError, create_provider
@@ -68,14 +69,14 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
     provider = create_provider(config)
     system = build_system(config, cwd, skills, phases)
 
-    def event(kind: str, data: dict[str, object]) -> None:
+    def event(activity: Event) -> None:
         if not interactive: return
-        if kind == "assistant":
-            print(data["text"], end="", flush=True, file=out)
-        elif kind == "tool_call":
-            print(f"\n-> {data['name']}", file=err)
-        elif kind == "tool_result" and bool(data.get("is_error")):
-            print(f"  error: {data['content']}", file=err)
+        if activity.kind in {EventKind.ASSISTANT_TEXT, EventKind.ASSISTANT_COMMENTARY}:
+            print(activity.text, end="", flush=True, file=out)
+        elif activity.kind == EventKind.TOOL_CALL:
+            print(f"\n-> {activity.name}", file=err)
+        elif activity.kind == EventKind.TOOL_RESULT and activity.is_error:
+            print(f"  error: {activity.text}", file=err)
 
     def confirm(prompt: str) -> bool:
         try: return input(f"{prompt} [y/N] ").strip().lower() in {"y", "yes"}
@@ -108,16 +109,16 @@ def run_headless(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO)
     calls = errors = 0
     result: dict[str, object] = {"ok": False, "elapsed_ms": 0, "provider": cfg.provider, "model": cfg.model, "tool_calls": 0, "tool_errors": 0}
     try:
+        cancellation = CancellationToken.with_timeout(options.timeout)
         agent, _, _ = _make_agent(cfg, cwd, err=stderr)
-        if hasattr(agent.provider, "timeout"): agent.provider.timeout = min(agent.provider.timeout, options.timeout)
-        def count(kind: str, data: dict[str, object]) -> None:
+        def count(activity: Event) -> None:
             nonlocal calls, errors
-            if kind == "tool_call": calls += 1
-            elif kind == "tool_result" and data.get("is_error"): errors += 1
+            if activity.kind == EventKind.TOOL_CALL: calls += 1
+            elif activity.kind == EventKind.TOOL_RESULT and activity.is_error: errors += 1
         agent.on_event = count
-        final = agent.send(prompt)
+        final = agent.send(prompt, cancellation=cancellation)
         result.update(ok=True, final=final)
-    except (ProviderError, OSError, ValueError, RuntimeError) as exc:
+    except (CancelledError, ProviderError, OSError, ValueError, RuntimeError) as exc:
         result["error"] = str(exc)
     result.update(elapsed_ms=int((time.monotonic() - started) * 1000), tool_calls=calls, tool_errors=errors)
     if options.json_output: print(json.dumps(result), file=stdout)

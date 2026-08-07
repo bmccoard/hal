@@ -5,15 +5,18 @@ import functools
 import json
 import os
 import re
+import signal
 import shutil
 import stat
 import subprocess
 import tempfile
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
+from .cancellation import CancelledError, CancellationToken, cancellation_or_default
 from .models import ToolSpec
 
 MAX_RESULT = 256 * 1024
@@ -27,8 +30,11 @@ def _bounded(text: str, limit: int = MAX_RESULT) -> str:
     return raw[:half].decode("utf-8", "replace") + "\n... output truncated ...\n" + raw[-half:].decode("utf-8", "replace")
 
 
-def _atomic_write(path: Path, content: str) -> None:
+def _atomic_write(path: Path, content: str,
+                  cancellation: CancellationToken | None = None) -> None:
     """Replace a UTF-8 file atomically while retaining its existing mode."""
+    cancellation = cancellation_or_default(cancellation)
+    cancellation.raise_if_cancelled()
     path.parent.mkdir(parents=True, exist_ok=True)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
     descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -38,6 +44,7 @@ def _atomic_write(path: Path, content: str) -> None:
             handle.flush()
             os.fsync(handle.fileno())
         os.chmod(temp_name, mode)
+        cancellation.raise_if_cancelled()
         os.replace(temp_name, path)
     finally:
         if os.path.exists(temp_name):
@@ -98,7 +105,40 @@ class Tool(ABC):
     def spec(self) -> ToolSpec: ...
 
     @abstractmethod
-    def run(self, arguments: dict[str, Any]) -> str: ...
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str: ...
+
+
+def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        taskkill = shutil.which("taskkill")
+        if taskkill:
+            try:
+                subprocess.run(
+                    [taskkill, "/PID", str(process.pid), "/T", "/F"],
+                    capture_output=True, text=True, timeout=5,
+                )
+            except (OSError, subprocess.SubprocessError):
+                process.terminate()
+        else:
+            process.terminate()
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+        except ProcessLookupError:
+            return
+    try:
+        process.wait(timeout=.5)
+    except subprocess.TimeoutExpired:
+        if os.name == "nt":
+            process.kill()
+        else:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
 
 
 class BashTool(Tool):
@@ -112,19 +152,51 @@ class BashTool(Tool):
             "type": "object", "properties": {"command": {"type": "string"}, "timeout": {"type": "number"}}, "required": ["command"]
         })
 
-    def run(self, arguments: dict[str, Any]) -> str:
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
         command = arguments.get("command")
         if not isinstance(command, str) or not command.strip():
             raise ValueError("command must be a non-empty string")
         timeout = min(float(arguments.get("timeout", self.timeout)), self.timeout)
+        kwargs: dict[str, Any] = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+        else:
+            kwargs["start_new_session"] = True
+        process = subprocess.Popen(
+            shell_argv(command), cwd=self.cwd, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, **kwargs,
+        )
+        started = time.monotonic()
         try:
-            result = subprocess.run(shell_argv(command), cwd=self.cwd, capture_output=True, text=True, timeout=timeout)
-        except subprocess.TimeoutExpired as exc:
-            partial = (exc.stdout or "") + (exc.stderr or "")
-            raise RuntimeError(f"command timed out after {timeout:g}s\n{_bounded(partial)}") from exc
-        output = (result.stdout or "") + (result.stderr or "")
-        if result.returncode:
-            raise RuntimeError(f"command exited with status {result.returncode}\n{_bounded(output)}")
+            while True:
+                cancellation.raise_if_cancelled()
+                remaining = timeout - (time.monotonic() - started)
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(process.args, timeout)
+                token_remaining = cancellation.remaining()
+                wait_for = min(.1, remaining)
+                if token_remaining is not None:
+                    wait_for = min(wait_for, max(.001, token_remaining))
+                try:
+                    stdout, stderr = process.communicate(timeout=wait_for)
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+        except (CancelledError, subprocess.TimeoutExpired) as exc:
+            _terminate_process_tree(process)
+            stdout, stderr = process.communicate()
+            if isinstance(exc, CancelledError):
+                raise
+            partial = (stdout or "") + (stderr or "")
+            raise RuntimeError(
+                f"command timed out after {timeout:g}s\n{_bounded(partial)}"
+            ) from exc
+        output = (stdout or "") + (stderr or "")
+        if process.returncode:
+            raise RuntimeError(f"command exited with status {process.returncode}\n{_bounded(output)}")
         return _bounded(output) or "command completed successfully"
 
 
@@ -137,7 +209,10 @@ class ReadFileTool(Tool):
             "type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["path"]
         })
 
-    def run(self, arguments: dict[str, Any]) -> str:
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
         raw_path = arguments.get("path")
         if not isinstance(raw_path, str) or not raw_path:
             raise ValueError("path is required")
@@ -171,6 +246,7 @@ class ReadFileTool(Tool):
         last_line_ended_newline = False
         with path.open("rb") as handle:
             while limit is None or selected_lines < limit:
+                cancellation.raise_if_cancelled()
                 line = handle.readline(MAX_RESULT + 1)
                 if not line:
                     break
@@ -212,13 +288,14 @@ class WriteFileTool(Tool):
             "type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]
         })
 
-    def run(self, arguments: dict[str, Any]) -> str:
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
         raw_path = arguments.get("path")
         content = arguments.get("content")
         if not isinstance(raw_path, str) or not raw_path or not isinstance(content, str):
             raise ValueError("path and string content are required")
         path = Path(raw_path)
-        _atomic_write(path, content)
+        _atomic_write(path, content, cancellation)
         return f"wrote {len(content.encode('utf-8'))} bytes to {path}"
 
 
@@ -229,7 +306,10 @@ class EditFileTool(Tool):
             "type": "object", "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["path", "old_string", "new_string"]
         })
 
-    def run(self, arguments: dict[str, Any]) -> str:
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
         raw_path = arguments.get("path")
         old = arguments.get("old_string")
         new = arguments.get("new_string")
@@ -240,7 +320,7 @@ class EditFileTool(Tool):
         count = text.count(old)
         if count != 1:
             raise ValueError(f"old_string must occur exactly once (found {count})")
-        _atomic_write(path, text.replace(old, new, 1))
+        _atomic_write(path, text.replace(old, new, 1), cancellation)
         return f"edited {path}"
 
 
@@ -265,12 +345,15 @@ class GlobTool(_RootedTool):
             "type": "object", "properties": {"pattern": {"type": "string"}}, "required": ["pattern"]
         })
 
-    def run(self, arguments: dict[str, Any]) -> str:
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
         pattern = str(arguments.get("pattern", ""))
         if not pattern:
             raise ValueError("pattern is required")
         matches: list[str] = []
         for path in self.root.rglob("*"):
+            cancellation.raise_if_cancelled()
             if len(matches) >= 200:
                 break
             rel = path.relative_to(self.root).as_posix()
@@ -288,7 +371,10 @@ class GrepTool(_RootedTool):
             "type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}}, "required": ["pattern"]
         })
 
-    def run(self, arguments: dict[str, Any]) -> str:
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
         try:
             regex = re.compile(str(arguments.get("pattern", "")))
         except re.error as exc:
@@ -300,6 +386,7 @@ class GrepTool(_RootedTool):
         matches: list[dict[str, Any]] = []
         candidates = [base] if base.is_file() else base.rglob("*")
         for path in candidates:
+            cancellation.raise_if_cancelled()
             if len(matches) >= 200:
                 break
             if not path.is_file() or not self._within_root(path) or not fnmatch.fnmatch(path.name, include):
@@ -308,6 +395,7 @@ class GrepTool(_RootedTool):
                 if path.stat().st_size > 4 * 1024 * 1024:
                     continue
                 for number, line in enumerate(path.read_text(encoding="utf-8", errors="strict").splitlines(), 1):
+                    cancellation.raise_if_cancelled()
                     if regex.search(line):
                         matches.append({"path": path.relative_to(self.root).as_posix(), "line": number, "text": line[:2000]})
                         if len(matches) >= 200:
@@ -328,7 +416,10 @@ class Registry:
     def specs(self) -> list[ToolSpec]:
         return [self._tools[name].spec for name in sorted(self._tools)]
 
-    def run(self, name: str, arguments: dict[str, Any]) -> str:
+    def run(self, name: str, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
         try:
             tool = self._tools[name]
         except KeyError as exc:
@@ -337,7 +428,10 @@ class Registry:
         needs_approval = any(target == rule or (name == "bash" and target.startswith(rule) and (len(target) == len(rule) or target[len(rule)].isspace())) for rule in self.approvals)
         if needs_approval and (self.confirm is None or not self.confirm(f"Allow {name}: {target}?")):
             raise PermissionError(f"{name} was denied by the user")
-        return _bounded(tool.run(arguments))
+        cancellation.raise_if_cancelled()
+        output = tool.run(arguments, cancellation)
+        cancellation.raise_if_cancelled()
+        return _bounded(output)
 
 
 def default_registry(cwd: Path, root: Path | None = None, approvals: list[str] | None = None,

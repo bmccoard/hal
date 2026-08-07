@@ -5,10 +5,13 @@ import pytest
 from neo.agent import (
     Agent,
     ContextWindowExceededError,
+    Event,
+    EventKind,
     MaxOutputTokensError,
     MaxTurnsError,
     UnexpectedStopReasonError,
 )
+from neo.cancellation import CancelledError, CancellationToken
 from neo.models import ContentBlock, Response, ToolSpec
 from neo.tools import Registry, Tool, default_registry
 
@@ -19,7 +22,7 @@ class FakeProvider:
     def __init__(self) -> None:
         self.calls = 0
 
-    def complete(self, request):
+    def complete(self, request, cancellation=None):
         self.calls += 1
         if self.calls == 1:
             return Response([ContentBlock("tool_use", id="call-1", name="write_file", input={"path": str(Path(request.messages[0].content[0].text)), "content": "hello"})], "tool_use")
@@ -33,7 +36,7 @@ class ScriptedProvider:
         self.responses = list(responses)
         self.requests = []
 
-    def complete(self, request):
+    def complete(self, request, cancellation=None):
         self.requests.append(request)
         if not self.responses:
             raise AssertionError("unexpected provider call")
@@ -45,7 +48,7 @@ class InterruptTool(Tool):
     def spec(self) -> ToolSpec:
         return ToolSpec("interrupt", "Interrupt execution.", {"type": "object"})
 
-    def run(self, arguments):
+    def run(self, arguments, cancellation=None):
         raise KeyboardInterrupt
 
 
@@ -54,7 +57,7 @@ class FailTool(Tool):
     def spec(self) -> ToolSpec:
         return ToolSpec("fail", "Fail execution.", {"type": "object"})
 
-    def run(self, arguments):
+    def run(self, arguments, cancellation=None):
         raise RuntimeError("tool failed")
 
 
@@ -63,7 +66,7 @@ class NoopTool(Tool):
     def spec(self) -> ToolSpec:
         return ToolSpec("noop", "Do nothing.", {"type": "object"})
 
-    def run(self, arguments):
+    def run(self, arguments, cancellation=None):
         return "ok"
 
 
@@ -124,7 +127,7 @@ def test_unknown_stop_reason_keeps_safe_text_and_does_not_run_tool(tmp_path: Pat
     events = []
     agent = Agent(
         provider, "model", "system", default_registry(tmp_path, tmp_path),
-        on_event=lambda kind, data: events.append((kind, data)),
+        on_event=events.append,
     )
 
     with pytest.raises(UnexpectedStopReasonError) as raised:
@@ -133,7 +136,7 @@ def test_unknown_stop_reason_keeps_safe_text_and_does_not_run_tool(tmp_path: Pat
     assert raised.value.partial_text == "Partial answer."
     assert not target.exists()
     assert [block.type for block in agent.messages[-1].content] == ["text"]
-    assert any(kind == "error" for kind, _ in events)
+    assert any(event.kind == EventKind.ERROR for event in events)
 
 
 def test_refusal_ends_without_executing_announced_tools(tmp_path: Path) -> None:
@@ -218,14 +221,78 @@ def test_max_turns_returns_typed_error_with_accumulated_partial_text() -> None:
     events = []
     agent = Agent(
         provider, "model", "system", Registry([]), max_turns=2,
-        on_event=lambda kind, data: events.append((kind, data)),
+        on_event=events.append,
     )
 
     with pytest.raises(MaxTurnsError) as raised:
         agent.send("start")
 
     assert raised.value.partial_text == "First.\nSecond."
-    assert any(kind == "max_turns_reached" for kind, _ in events)
+    assert any(event.kind == EventKind.MAX_TURNS_REACHED for event in events)
+
+
+def test_structured_events_include_call_identity_commentary_and_timing() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock("tool_use", id="call-7", name="noop", input={})], "tool_use"),
+        Response([
+            ContentBlock("commentary", text="Checked the result. "),
+            ContentBlock("text", text="Done."),
+        ], "end_turn"),
+    ])
+    events: list[Event] = []
+    agent = Agent(
+        provider, "model", "system", Registry([NoopTool()]),
+        on_event=events.append,
+    )
+
+    assert agent.send("start") == "Done."
+    assert [event.kind for event in events] == [
+        EventKind.TOOL_CALL,
+        EventKind.TOOL_RESULT,
+        EventKind.ASSISTANT_COMMENTARY,
+        EventKind.ASSISTANT_TEXT,
+        EventKind.DONE,
+    ]
+    assert events[0].tool_use_id == events[1].tool_use_id == "call-7"
+    assert events[0].name == events[1].name == "noop"
+    assert events[1].duration_ms >= 0
+    assert all(event.elapsed_ms >= 0 for event in events)
+
+
+class CancelTool(Tool):
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec("cancel", "Cancel execution.", {"type": "object"})
+
+    def run(self, arguments, cancellation=None):
+        assert cancellation is not None
+        cancellation.cancel("cancelled by test tool")
+        cancellation.raise_if_cancelled()
+
+
+def test_cancellation_commits_error_and_skipped_results_for_announced_calls() -> None:
+    provider = ScriptedProvider([Response([
+        ContentBlock("tool_use", id="call-1", name="cancel", input={}),
+        ContentBlock("tool_use", id="call-2", name="noop", input={}),
+    ], "tool_use")])
+    events: list[Event] = []
+    agent = Agent(
+        provider, "model", "system", Registry([CancelTool(), NoopTool()]),
+        on_event=events.append,
+    )
+
+    with pytest.raises(CancelledError, match="cancelled by test tool"):
+        agent.send("start", cancellation=CancellationToken())
+
+    results = agent.messages[-1].content
+    assert [result.tool_use_id for result in results] == ["call-1", "call-2"]
+    assert all(result.is_error for result in results)
+    assert results[0].content == "cancelled by test tool"
+    assert "skipped" in results[1].content
+    assert [event.tool_use_id for event in events if event.kind == EventKind.TOOL_RESULT] == [
+        "call-1", "call-2",
+    ]
+    assert events[-1].kind == EventKind.ERROR
 
 
 def test_stop_sequence_is_a_normal_terminal_response() -> None:
