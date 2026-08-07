@@ -12,7 +12,7 @@ from .config import Config
 from .tools import native_shell, native_shell_version, workspace_root
 
 
-SYSTEM_PROMPT = """You are neo, a focused coding agent.
+SYSTEM_PROMPT = """You are HAL, a focused coding agent.
 
 Match the level of action requested by the user. For questions, explanations,
 reviews, diagnoses, and example requests, inspect relevant context when useful but do
@@ -119,7 +119,12 @@ def resolve_phases(config: Config) -> dict[str, Phase]:
 
 def load_skills(cwd: Path, home: Path | None = None) -> list[Skill]:
     found: dict[str, Skill] = {}
-    for parent in ((home or Path.home()) / ".neo" / "skills", workspace_root(cwd) / ".neo" / "skills"):
+    home = home or Path.home()
+    root = workspace_root(cwd)
+    for parent in (
+        home / ".neo" / "skills", home / ".hal" / "skills",
+        root / ".neo" / "skills", root / ".hal" / "skills",
+    ):
         if not parent.is_dir():
             continue
         for path in parent.glob("*/SKILL.md"):
@@ -139,9 +144,10 @@ def load_skills(cwd: Path, home: Path | None = None) -> list[Skill]:
 
 def load_agents_files(cwd: Path, home: Path | None = None) -> list[tuple[Path, str]]:
     docs: list[tuple[Path, str]] = []
-    global_path = (home or Path.home()) / ".neo" / "AGENTS.md"
-    if global_path.is_file() and (text := global_path.read_text(encoding="utf-8").strip()):
-        docs.append((global_path, text))
+    home = home or Path.home()
+    for global_path in (home / ".neo" / "AGENTS.md", home / ".hal" / "AGENTS.md"):
+        if global_path.is_file() and (text := global_path.read_text(encoding="utf-8").strip()):
+            docs.append((global_path, text))
     root = workspace_root(cwd).resolve()
     current = cwd.resolve()
     chain = []

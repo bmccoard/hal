@@ -3,22 +3,22 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [project]
-name = "neo-agent-cli"
+name = "hal-agent-cli"
 version = "0.1.0"
-description = "A Python port of the Neo coding-agent CLI"
+description = "HAL, a local provider-neutral coding-agent CLI based on Neo"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = ["PyYAML>=6.0", "dulwich>=0.24,<0.26"]
 
 [project.scripts]
-neo = "neo.cli:main"
+hal = "hal.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/neo"]
+packages = ["src/hal"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

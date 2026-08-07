@@ -177,7 +177,7 @@ def _chat_messages(messages: list[Message]) -> list[dict[str, Any]]:
 
 
 def _chat_stop_reason(choice: dict[str, Any], message: dict[str, Any]) -> str:
-    """Normalize Chat Completions finish reasons to Neo's internal protocol."""
+    """Normalize Chat Completions finish reasons to HAL's internal protocol."""
     finish_reason = choice.get("finish_reason", "")
     if message.get("tool_calls") or finish_reason == "tool_calls":
         return "tool_use"

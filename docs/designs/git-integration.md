@@ -3,17 +3,17 @@
 | Field | Value |
 | --- | --- |
 | Status | Implemented |
-| Target | `neo-py` |
+| Target | `HAL` |
 | Backends | Native Git and Dulwich |
 
 ## Decision
 
-Neo exposes structured Git tools backed by one normalized Python interface. The
+HAL exposes structured Git tools backed by one normalized Python interface. The
 default `auto` selection uses the native Git executable when it is present and
 otherwise falls back to Dulwich, which is a required package dependency. Users can
 force `native` or `dulwich` through `git.backend`.
 
-This boundary makes agent behavior independent of shell syntax and allows Neo to run
+This boundary makes agent behavior independent of shell syntax and allows HAL to run
 on managed Windows computers where installing `git.exe` is prohibited but Python
 packages are permitted.
 
@@ -28,8 +28,8 @@ packages are permitted.
 | `git_push` | Remote | Push an explicitly requested branch and remote. |
 
 `git_commit` rejects empty path lists, paths outside the repository, `.git` internals,
-known local credential/configuration files (`.env`, `neo.yaml`, and
-`.neo/auth.json`), and already-staged paths outside the requested set. Its result
+known local credential/configuration files (`.env`, `hal.yaml`, legacy `neo.yaml`,
+`.hal/auth.json`, and legacy `.neo/auth.json`), and already-staged paths outside the requested set. Its result
 always states that the commit was not pushed. `git_push` remains separate so local
 check-in authorization cannot silently become a remote mutation.
 

@@ -3,12 +3,12 @@ import json
 import signal
 from types import SimpleNamespace
 
-from neo.agent import Agent
-from neo.cli import _save_live_session, main, run_chat, run_headless
-from neo.config import parse_config
-from neo.models import ContentBlock, Response, ToolSpec, Usage
-from neo.sessions import Session
-from neo.tools import Registry, Tool
+from hal.agent import Agent
+from hal.cli import _save_live_session, main, run_chat, run_headless
+from hal.config import parse_config
+from hal.models import ContentBlock, Response, ToolSpec, Usage
+from hal.sessions import Session
+from hal.tools import Registry, Tool
 
 
 class CP1252Buffer(io.StringIO):
@@ -37,9 +37,9 @@ def test_headless_timeout_covers_the_complete_agent_loop(monkeypatch) -> None:
             cancellation.wait(1)
 
     config = SimpleNamespace(provider="fake", model="model")
-    monkeypatch.setattr("neo.cli._load", lambda _cwd, _stderr: config)
+    monkeypatch.setattr("hal.cli._load", lambda _cwd, _stderr: config)
     monkeypatch.setattr(
-        "neo.cli._make_agent",
+        "hal.cli._make_agent",
         lambda *_args, **_kwargs: (SlowAgent(), [], {}),
     )
     output, error = io.StringIO(), io.StringIO()
@@ -94,10 +94,10 @@ def test_ctrl_c_cancels_turn_commits_results_and_saves_valid_session(monkeypatch
     )
     inputs = iter(["work", "/exit"])
     previous_handler = signal.getsignal(signal.SIGINT)
-    monkeypatch.setattr("neo.cli.SessionStore", lambda: store)
-    monkeypatch.setattr("neo.cli.load_config", lambda _cwd: config)
+    monkeypatch.setattr("hal.cli.SessionStore", lambda: store)
+    monkeypatch.setattr("hal.cli.load_config", lambda _cwd: config)
     monkeypatch.setattr(
-        "neo.cli._make_agent",
+        "hal.cli._make_agent",
         lambda *_args, **_kwargs: (agent, [], {}),
     )
     monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
@@ -134,7 +134,7 @@ def test_doctor_accepts_dulwich_fallback_when_git_executable_is_missing(
     monkeypatch, tmp_path,
 ) -> None:
     from dulwich import porcelain
-    from neo.cli import run_doctor
+    from hal.cli import run_doctor
 
     root = tmp_path / "repo"
     porcelain.init(root)
@@ -143,8 +143,8 @@ def test_doctor_accepts_dulwich_fallback_when_git_executable_is_missing(
         "git": {"backend": "auto"},
     })
     monkeypatch.chdir(root)
-    monkeypatch.setattr("neo.cli.load_config", lambda: config)
-    monkeypatch.setattr("neo.git.shutil.which", lambda _name: None)
+    monkeypatch.setattr("hal.cli.load_config", lambda: config)
+    monkeypatch.setattr("hal.git.shutil.which", lambda _name: None)
     output = io.StringIO()
 
     assert run_doctor(output) == 0

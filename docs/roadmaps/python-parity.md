@@ -1,14 +1,14 @@
-# Neo Python parity roadmap
+# HAL parity roadmap
 
 | Field | Value |
 | --- | --- |
 | Status | In progress |
-| Target | `neo-py` |
+| Target | `HAL` |
 | Last reviewed | 2026-08-06 |
 | Current milestone | Phase 1 - core correctness and safety |
 | Next work | Stream and bound tool output before buffering it in memory |
 
-Audit basis: compared `neo-py` with the Go `neo` tree and its developer docs on
+Audit basis: compared HAL with the upstream Go Neo tree and its developer docs on
 2026-08-06. The Python port has the basic provider-neutral loop, four API-key
 providers, native Windows/Unix shell selection, coding tools, configuration,
 AGENTS.md, skills, named phases, headless mode, and resumable sessions. The work
@@ -23,7 +23,7 @@ tests, or documentation recorded in the implementation log.
 - [ ] Preserve Python-specific improvements: Windows PowerShell support, custom
   OpenAI-compatible provider profiles, `.env` loading, and editable/package installs.
 - [ ] Add characterization tests before changing transcript, provider, session,
-  tool, or CLI behavior. Keep old session files and minimal `neo.yaml` files compatible.
+  tool, or CLI behavior. Keep HAL files and legacy Neo sessions/configuration compatible.
 - [ ] Implement each phase with focused tests, full `pytest`, documentation updates,
   and a manual Windows smoke test. Add Linux and macOS CI once CI exists.
 - [ ] Maintain a checked feature-parity matrix linking each Go capability to its
@@ -48,7 +48,7 @@ tests, or documentation recorded in the implementation log.
 - [x] Match Go stop handling: support `end_turn`, `stop_sequence`, `tool_use`,
   `refusal`, `pause_turn`, `max_tokens`, and context-window exhaustion; fail once on
   unknown reasons; return partial text with typed truncation/max-turn errors.
-- [x] Make `neo run --timeout` a true wall-clock deadline covering retries, provider
+- [x] Make `hal run --timeout` a true wall-clock deadline covering retries, provider
   calls, tools, and the complete agent loop rather than only shortening one HTTP call.
 - [x] Add signal handling and cancellation propagation. Interrupt provider requests,
   shell process trees, searches, reads, and pending calls without corrupting history.
@@ -108,9 +108,9 @@ tests, or documentation recorded in the implementation log.
   calls while retaining portable text/tool history across provider switches.
 - [ ] Add best-effort image attachments from interactive path input, sniff supported
   media types, persist image blocks, and test Anthropic/OpenAI/Gemini conversions.
-- [ ] Implement OpenAI ChatGPT/Codex subscription authentication: `neo login`, device
+- [ ] Implement OpenAI ChatGPT/Codex subscription authentication: `hal login`, device
   code flow, restrictive atomic credential storage, refresh, Codex transport, and
-  `neo logout`. Keep API-key auth as the default.
+  `hal logout`. Keep API-key auth as the default.
 - [ ] Implement live model discovery/curated model choices per provider and make
   `/model` select from them instead of accepting an unchecked arbitrary string.
 - [ ] Make model switching update the active compactor, any following subagent
@@ -167,8 +167,8 @@ tests, or documentation recorded in the implementation log.
 
 ## Phase 5 - Skills, headless mode, sessions, and CLI polish
 
-- [ ] Add one-shot skill invocation with `neo run --skill repo-summary`, generalized
-  as `neo run --skill <name>`, with arguments, unknown-skill errors, feature-flag
+- [ ] Add one-shot skill invocation with `hal run --skill repo-summary`, generalized
+  as `hal run --skill <name>`, with arguments, unknown-skill errors, feature-flag
   behavior, stdin composition, display text, and JSON-mode tests.
 - [ ] Report malformed/unreadable skills and AGENTS.md files cleanly. Preserve project
   skill precedence and layered AGENTS.md order; warn and continue where safe.
@@ -181,7 +181,7 @@ tests, or documentation recorded in the implementation log.
   failures without discarding the live conversation, and allow retry.
 - [ ] Keep provider-specific opaque data, image blocks, tool history, usage, visible
   phase/skill invocations, cwd, provider, model, and auth mode compatible on resume.
-- [ ] Improve `neo doctor` with independent checks even after config failure, portable
+- [ ] Improve `hal doctor` with independent checks even after config failure, portable
   Python/launcher diagnostics, writable session/auth checks, and no secret disclosure.
 - [ ] Add build-derived version metadata and consistent CLI parsing/error/exit-code
   tests across `chat`, `run`, `sessions`, `doctor`, `resume`, `login`, and `logout`.
@@ -197,7 +197,7 @@ tests, or documentation recorded in the implementation log.
 - [ ] Add CI for supported Python versions on Windows, Linux, and macOS, including
   packaging/install smoke tests and console-encoding tests.
 - [ ] Produce versioned wheel/sdist releases and a verified portable installation path
-  so users do not need an editable checkout. Document where the `neo.exe` launcher and
+  so users do not need an editable checkout. Document where the `hal.exe` launcher and
   source package live on Windows.
 - [ ] Decide whether release channels, installer checksum verification, generated docs
   site, and nightly builds are required for full project-level parity; implement and
@@ -207,15 +207,16 @@ tests, or documentation recorded in the implementation log.
 
 | Date | Completed capability | Evidence | Verification |
 | --- | --- | --- | --- |
-| 2026-08-06 | Atomic tool-turn transcripts and explicit provider stop outcomes | `src/neo/agent.py`, `tests/test_agent.py` | Full suite: 37 passed |
-| 2026-08-06 | Atomic, mode-preserving file writes and edits | `src/neo/tools.py`, `tests/test_tools.py` | Full suite: 37 passed |
-| 2026-08-06 | Bounded and pageable `read_file` behavior | `src/neo/tools.py`, `tests/test_tools.py` | Full suite: 37 passed |
-| 2026-08-06 | Normalize Chat Completions `stop`, `length`, and tool-call finish reasons | `src/neo/providers.py`, `tests/test_providers.py` | Full suite: 39 passed |
-| 2026-08-06 | Add host/native-shell context, read-only action policy, dependency policy, approval guidance, and cross-shell tests | `src/neo/context.py`, `src/neo/tools.py`, `tests/test_context.py`, `tests/test_tools.py`, `README.md`, `neo.yaml.example` | Full suite: 44 passed |
-| 2026-08-07 | Add typed agent events with commentary/text separation, call identity, timing, and structured failures | `src/neo/agent.py`, `src/neo/cli.py`, `tests/test_agent.py` | Full suite: 45 passed; Windows help/version smoke passed |
-| 2026-08-07 | Propagate cooperative cancellation and deadlines through the core loop, provider I/O/retries, tools, and headless mode; preserve cancelled tool transcripts and terminate shell process trees | `src/neo/cancellation.py`, `src/neo/agent.py`, `src/neo/providers.py`, `src/neo/tools.py`, `src/neo/cli.py`, `tests/test_agent.py`, `tests/test_providers.py`, `tests/test_tools.py`, `tests/test_cli.py`, `README.md` | Full suite: 49 passed; compileall and Windows help/version/shell-cancellation smoke passed |
-| 2026-08-07 | Convert interactive SIGINT into active-turn cancellation, restore idle Ctrl-C behavior, save valid cancelled transcripts, and retain live state after save failures | `src/neo/cancellation.py`, `src/neo/cli.py`, `tests/test_cli.py`, `README.md` | Full suite: 51 passed; compileall and Windows help/version smoke passed |
-| 2026-08-07 | Add safe structured Git tools with native/Dulwich backends, automatic no-binary fallback, local-only check-ins, explicit pushes, doctor integration, configuration, and packaging | `src/neo/git.py`, `src/neo/git_tools.py`, `src/neo/tools.py`, `src/neo/config.py`, `src/neo/context.py`, `src/neo/cli.py`, `tests/test_git.py`, `tests/test_config.py`, `tests/test_context.py`, `tests/test_cli.py`, `tests/test_tools.py`, `pyproject.toml`, `README.md`, `neo.yaml.example`, `docs/designs/git-integration.md` | Full suite: 66 passed; compileall, pip check, wheel build, native doctor, native/Dulwich commits, and Dulwich local-remote push passed on Windows |
+| 2026-08-06 | Atomic tool-turn transcripts and explicit provider stop outcomes | `src/hal/agent.py`, `tests/test_agent.py` | Full suite: 37 passed |
+| 2026-08-06 | Atomic, mode-preserving file writes and edits | `src/hal/tools.py`, `tests/test_tools.py` | Full suite: 37 passed |
+| 2026-08-06 | Bounded and pageable `read_file` behavior | `src/hal/tools.py`, `tests/test_tools.py` | Full suite: 37 passed |
+| 2026-08-06 | Normalize Chat Completions `stop`, `length`, and tool-call finish reasons | `src/hal/providers.py`, `tests/test_providers.py` | Full suite: 39 passed |
+| 2026-08-06 | Add host/native-shell context, read-only action policy, dependency policy, approval guidance, and cross-shell tests | `src/hal/context.py`, `src/hal/tools.py`, `tests/test_context.py`, `tests/test_tools.py`, `README.md`, `hal.yaml.example` | Full suite: 44 passed |
+| 2026-08-07 | Add typed agent events with commentary/text separation, call identity, timing, and structured failures | `src/hal/agent.py`, `src/hal/cli.py`, `tests/test_agent.py` | Full suite: 45 passed; Windows help/version smoke passed |
+| 2026-08-07 | Propagate cooperative cancellation and deadlines through the core loop, provider I/O/retries, tools, and headless mode; preserve cancelled tool transcripts and terminate shell process trees | `src/hal/cancellation.py`, `src/hal/agent.py`, `src/hal/providers.py`, `src/hal/tools.py`, `src/hal/cli.py`, `tests/test_agent.py`, `tests/test_providers.py`, `tests/test_tools.py`, `tests/test_cli.py`, `README.md` | Full suite: 49 passed; compileall and Windows help/version/shell-cancellation smoke passed |
+| 2026-08-07 | Convert interactive SIGINT into active-turn cancellation, restore idle Ctrl-C behavior, save valid cancelled transcripts, and retain live state after save failures | `src/hal/cancellation.py`, `src/hal/cli.py`, `tests/test_cli.py`, `README.md` | Full suite: 51 passed; compileall and Windows help/version smoke passed |
+| 2026-08-07 | Add safe structured Git tools with native/Dulwich backends, automatic no-binary fallback, local-only check-ins, explicit pushes, doctor integration, configuration, and packaging | `src/hal/git.py`, `src/hal/git_tools.py`, `src/hal/tools.py`, `src/hal/config.py`, `src/hal/context.py`, `src/hal/cli.py`, `tests/test_git.py`, `tests/test_config.py`, `tests/test_context.py`, `tests/test_cli.py`, `tests/test_tools.py`, `pyproject.toml`, `README.md`, `hal.yaml.example`, `docs/designs/git-integration.md` | Full suite: 66 passed; compileall, pip check, wheel build, native doctor, native/Dulwich commits, and Dulwich local-remote push passed on Windows |
+| 2026-08-07 | Rename the installed product, terminal command, Python namespace, configuration/state paths, skill paths, tests, and documentation to HAL while retaining legacy Neo read compatibility and leaving the repository name unchanged | `src/hal/`, `.hal/`, `tests/`, `pyproject.toml`, `README.md`, `hal.yaml.example`, `.gitignore`, `AGENTS.md.example`, `docs/` | Full suite: 71 passed; compileall, pip check, editable reinstall, `hal` help/version/doctor, launcher replacement, and wheel namespace inspection passed on Windows |
 
 ## Final parity gate
 

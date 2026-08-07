@@ -114,8 +114,8 @@ class GitCommitTool:
         paths = normalize_paths(self.backend.root, arguments.get("paths"))
         sensitive = [
             path for path in paths
-            if Path(path).name.casefold() in {".env", "neo.yaml"}
-            or path.casefold() == ".neo/auth.json"
+            if Path(path).name.casefold() in {".env", "hal.yaml", "neo.yaml"}
+            or path.casefold() in {".hal/auth.json", ".neo/auth.json"}
         ]
         if sensitive:
             raise ValueError(

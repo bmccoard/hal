@@ -4,10 +4,10 @@ import urllib.error
 
 import pytest
 
-from neo.cancellation import CancelledError, CancellationToken
-from neo.config import parse_config
-from neo.models import Message, ContentBlock, Request
-from neo.providers import OpenAICompatibleProvider, OpenRouterProvider, create_provider
+from hal.cancellation import CancelledError, CancellationToken
+from hal.config import parse_config
+from hal.models import Message, ContentBlock, Request
+from hal.providers import OpenAICompatibleProvider, OpenRouterProvider, create_provider
 
 
 def test_custom_openai_profile_uses_chat_completions_endpoint(monkeypatch) -> None:
@@ -112,7 +112,7 @@ def test_retry_after_wait_respects_cancellation_deadline(monkeypatch) -> None:
     error = urllib.error.HTTPError(
         provider.endpoint, 429, "busy", {"Retry-After": "30"}, io.BytesIO(b"busy"),
     )
-    monkeypatch.setattr("neo.providers.urllib.request.urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
+    monkeypatch.setattr("hal.providers.urllib.request.urlopen", lambda *_args, **_kwargs: (_ for _ in ()).throw(error))
     started = time.monotonic()
 
     with pytest.raises(CancelledError, match="timed out"):

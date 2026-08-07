@@ -6,23 +6,23 @@ import pytest
 from dulwich import porcelain
 from dulwich.repo import Repo
 
-from neo.git import (
+from hal.git import (
     DulwichGitBackend,
     GitError,
     NativeGitBackend,
     create_git_backend,
     normalize_paths,
 )
-from neo.git_tools import GitCommitTool, GitDiffTool, GitLogTool, GitPushTool
+from hal.git_tools import GitCommitTool, GitDiffTool, GitLogTool, GitPushTool
 
 
 @pytest.fixture(autouse=True)
 def git_identity(monkeypatch):
     values = {
-        "GIT_AUTHOR_NAME": "Neo Test",
-        "GIT_AUTHOR_EMAIL": "neo@example.test",
-        "GIT_COMMITTER_NAME": "Neo Test",
-        "GIT_COMMITTER_EMAIL": "neo@example.test",
+        "GIT_AUTHOR_NAME": "HAL Test",
+        "GIT_AUTHOR_EMAIL": "hal@example.test",
+        "GIT_COMMITTER_NAME": "HAL Test",
+        "GIT_COMMITTER_EMAIL": "hal@example.test",
     }
     for name, value in values.items():
         monkeypatch.setenv(name, value)
@@ -49,7 +49,7 @@ def exercise_local_backend(backend, root: Path) -> None:
     history = backend.log(1)
     assert history[0].commit == commit_id
     assert history[0].subject == "Add one"
-    assert history[0].author_email == "neo@example.test"
+    assert history[0].author_email == "hal@example.test"
 
 
 def test_dulwich_backend_supports_local_workflow_without_git_binary(tmp_path: Path) -> None:
@@ -66,7 +66,7 @@ def test_native_backend_matches_local_workflow_when_available(tmp_path: Path) ->
 
 
 def test_auto_backend_falls_back_to_dulwich(monkeypatch, tmp_path: Path) -> None:
-    monkeypatch.setattr("neo.git.shutil.which", lambda _name: None)
+    monkeypatch.setattr("hal.git.shutil.which", lambda _name: None)
     assert create_git_backend(tmp_path, "auto").name == "dulwich"
     with pytest.raises(GitError, match="not installed"):
         create_git_backend(tmp_path, "native")
@@ -112,7 +112,9 @@ def test_git_paths_are_repository_relative_and_cannot_escape(tmp_path: Path) -> 
         normalize_paths(root, [".git/config"])
 
 
-@pytest.mark.parametrize("path", [".env", "neo.yaml", ".neo/auth.json"])
+@pytest.mark.parametrize(
+    "path", [".env", "hal.yaml", ".hal/auth.json", "neo.yaml", ".neo/auth.json"],
+)
 def test_commit_tool_rejects_known_local_configuration(path: str, tmp_path: Path) -> None:
     root = new_repo(tmp_path)
     target = root / path

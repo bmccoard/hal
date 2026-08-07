@@ -1,11 +1,11 @@
-# Copy to neo.yaml and adjust for your provider/model. Keep credentials in the
+# Copy to hal.yaml and adjust for your provider/model. Keep credentials in the
 # ignored .env file when possible so routine config inspection cannot display them.
 
 provider: openrouter
 model: openai/gpt-4o-mini
 
 # Git operations prefer the installed git executable and fall back to the
-# bundled pure-Python Dulwich backend. Set this to native or dulwich to require
+# required Dulwich Python backend. Set this to native or dulwich to require
 # one backend explicitly.
 git:
   backend: auto
@@ -28,7 +28,7 @@ compaction:
 
 features:
   agents_file: true     # Active: load applicable AGENTS.md instructions.
-  skills: true          # Active: discover and expand Neo skills.
+  skills: true          # Active: discover and expand HAL skills.
   # Reserved: parsed, but provider prompt caching is not implemented yet.
   prompt_caching: true
 

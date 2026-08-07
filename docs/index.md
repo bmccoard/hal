@@ -1,4 +1,4 @@
-# Neo Python planning index
+# HAL planning index
 
 This directory is the source of truth for product decisions and implementation
 plans that are safe to keep in the repository.

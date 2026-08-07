@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from neo.agent import (
+from hal.agent import (
     Agent,
     ContextWindowExceededError,
     Event,
@@ -11,9 +11,9 @@ from neo.agent import (
     MaxTurnsError,
     UnexpectedStopReasonError,
 )
-from neo.cancellation import CancelledError, CancellationToken
-from neo.models import ContentBlock, Response, ToolSpec
-from neo.tools import Registry, Tool, default_registry
+from hal.cancellation import CancelledError, CancellationToken
+from hal.models import ContentBlock, Response, ToolSpec
+from hal.tools import Registry, Tool, default_registry
 
 
 class FakeProvider:

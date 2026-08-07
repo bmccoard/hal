@@ -1,9 +1,10 @@
-# Neo Python CLI
+# HAL CLI
 
-Neo Python is a Python package port of the Neo CLI and is based on the upstream
-project at https://github.com/owainlewis/neo. It keeps Neo's provider-neutral
-agent loop, local-first configuration, built-in coding tools, project
-instructions, skills, named phases, headless mode, and resumable sessions.
+HAL is a Python coding-agent CLI based on the upstream Neo project at
+https://github.com/owainlewis/neo. Its name is inspired by HAL 9000 from
+*2001: A Space Odyssey*. HAL keeps the upstream provider-neutral agent loop,
+local-first configuration, built-in coding tools, project instructions, skills,
+named phases, headless mode, and resumable sessions.
 The interactive interface is a portable REPL rather than the Go version's
 Bubble Tea TUI.
 
@@ -12,23 +13,24 @@ Bubble Tea TUI.
 Python 3.11 or newer is required.
 
 ```bash
-cd neo-py
+cd <repository-checkout>
 python -m pip install -e .
-neo help
+hal help
 ```
 
 The same CLI works without installing a script after setting `PYTHONPATH=src`:
 
 ```bash
-python -m neo --help
+python -m hal --help
 ```
 
 ## Configure
 
-Neo loads the first file that exists: `./neo.yaml`, then
-`~/.neo/config.yaml`, then built-in defaults. Files are not merged. Copy
-[`neo.yaml.example`](neo.yaml.example) to `neo.yaml`, which is ignored by Git
-and may contain local credentials. Never commit `neo.yaml`.
+HAL loads the first file that exists: `./hal.yaml`, then
+`~/.hal/config.yaml`, then the legacy `./neo.yaml` and `~/.neo/config.yaml`
+locations, then built-in defaults. Files are not merged. Copy
+[`hal.yaml.example`](hal.yaml.example) to `hal.yaml`, which is ignored by Git
+and may contain local credentials. Never commit `hal.yaml`.
 
 ```yaml
 provider: anthropic
@@ -67,7 +69,7 @@ but changing them does not currently alter runtime behavior.
 The reserved settings should be tracked as implementation work in the issue
 tracker before being described as supported features.
 
-Keep model selection in `neo.yaml` and put credentials in the ignored `.env` file.
+Keep model selection in `hal.yaml` and put credentials in the ignored `.env` file.
 This reduces the chance that routine configuration inspection displays a token:
 
 ```yaml
@@ -105,7 +107,7 @@ Chat Completions gateways differ on the output-token field. Profiles use
 gateway that rejects `max_tokens`. The setting is restricted to those two field
 names so arbitrary configuration cannot alter unrelated request fields.
 
-Neo reads provider credentials from `.env` or the process environment:
+HAL reads provider credentials from `.env` or the process environment:
 
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY`
@@ -122,34 +124,34 @@ These are operating-system shell commands, not model tools or skills:
 
 | Command | What it does |
 | --- | --- |
-| `neo` | Starts an interactive conversation and saves it as a session. |
-| `neo run "..."` | Runs one prompt and exits without creating a session. |
-| `neo run --json "..."` | Runs one headless prompt and returns JSON containing status, timing, tool counts, and the final answer. |
-| `neo sessions` | Lists locally saved interactive sessions from `~/.neo/sessions/`. |
-| `neo sessions search parser` | Searches saved transcripts for `parser`. |
-| `neo resume <id>` | Continues a saved interactive session, including its messages, model, usage, and working directory. |
-| `neo doctor` | Checks configuration, credentials, model, session storage, Git, and workspace status without contacting the model. |
+| `hal` | Starts an interactive conversation and saves it as a session. |
+| `hal run "..."` | Runs one prompt and exits without creating a session. |
+| `hal run --json "..."` | Runs one headless prompt and returns JSON containing status, timing, tool counts, and the final answer. |
+| `hal sessions` | Lists locally saved interactive sessions from `~/.hal/sessions/`. |
+| `hal sessions search parser` | Searches saved transcripts for `parser`. |
+| `hal resume <id>` | Continues a saved interactive session, including its messages, model, usage, and working directory. |
+| `hal doctor` | Checks configuration, credentials, model, session storage, Git, and workspace status without contacting the model. |
 
-`neo run "run tests"` asks the model to run tests; it does not execute a fixed
+`hal run "run tests"` asks the model to run tests; it does not execute a fixed
 test command itself. The model normally fulfills that request with its shell
 tool.
 
-`neo run --timeout <duration>` applies one wall-clock deadline to the provider
+`hal run --timeout <duration>` applies one wall-clock deadline to the provider
 calls, retry waits, agent loop, and tool calls. When a shell command is active,
-Neo terminates its process tree before returning the timeout error. Durations
+HAL terminates its process tree before returning the timeout error. Durations
 accept seconds or an `s`, `m`, or `h` suffix, such as `30s` or `10m`.
 
 ### Commands, tools, skills, and phases
 
-- **CLI commands** are entered in the operating-system shell, such as `neo run`
-  and `neo doctor`.
-- **Interactive commands** are entered at the `neo>` prompt, such as `/help`,
+- **CLI commands** are entered in the operating-system shell, such as `hal run`
+  and `hal doctor`.
+- **Interactive commands** are entered at the `hal>` prompt, such as `/help`,
   `/clear`, `/model`, and `/exit`.
 - **Tools** are executable capabilities available to the model: `bash`,
   `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `git_status`,
   `git_diff`, `git_log`, `git_commit`, and `git_push`.
 - **Skills** are reusable instruction documents stored at
-  `.neo/skills/<name>/SKILL.md`. They guide the model but do not execute code by
+  `.hal/skills/<name>/SKILL.md`. They guide the model but do not execute code by
   themselves.
 - **Named phases** are built-in one-turn instruction modes: `/design`, `/plan`,
   `/build`, and `/review`.
@@ -165,14 +167,14 @@ Interactive mode supports `/help`, `/clear`, `/model <id>`, `/exit`, the built-i
 and `!command` for a direct local shell command.
 
 While a model turn or direct `!command` is active, Ctrl-C cancels that operation
-and returns to the `neo>` prompt. Neo completes any required cancelled/skipped
+and returns to the `hal>` prompt. HAL completes any required cancelled/skipped
 tool results before saving the session, so resumed provider transcripts remain
-structurally valid. Ctrl-C while Neo is waiting at the prompt exits normally.
+structurally valid. Ctrl-C while HAL is waiting at the prompt exits normally.
 
 ### Git backends and check-ins
 
-Neo uses dedicated Git tools instead of requiring the model to construct shell
-commands. With the default `git.backend: auto`, Neo uses the installed `git`
+HAL uses dedicated Git tools instead of requiring the model to construct shell
+commands. With the default `git.backend: auto`, HAL uses the installed `git`
 executable when available and falls back to the required
 [Dulwich Python implementation](https://www.dulwich.io/getting-started/) when it is
 not. Force one implementation when troubleshooting or
@@ -183,7 +185,7 @@ git:
   backend: dulwich  # auto, native, or dulwich
 ```
 
-Asking Neo to "check in" or "commit" changes authorizes one **local commit**. Neo
+Asking HAL to "check in" or "commit" changes authorizes one **local commit**. HAL
 must inspect status/diffs first, pass an explicit list of intended paths to
 `git_commit`, and report the resulting commit ID. The commit tool refuses to include
 already-staged files outside that list. It never pushes. Remote changes require a
@@ -199,11 +201,14 @@ environment variables) before committing.
 
 ### Skills
 
-Skills are reusable prompt instructions, not executable tools. Neo discovers:
+Skills are reusable prompt instructions, not executable tools. HAL discovers HAL
+paths and then legacy Neo paths for migration compatibility:
 
 ```text
-~/.neo/skills/<name>/SKILL.md             user-global skills
-<workspace>/.neo/skills/<name>/SKILL.md  project skills
+~/.hal/skills/<name>/SKILL.md             user-global skills
+<workspace>/.hal/skills/<name>/SKILL.md  project skills
+~/.neo/skills/<name>/SKILL.md             legacy user-global skills
+<workspace>/.neo/skills/<name>/SKILL.md  legacy project skills
 ```
 
 A project skill overrides a global skill with the same name. Each `SKILL.md`
@@ -223,23 +228,24 @@ evidence for the result.
 ```
 
 This repository includes a working
-[`repo-summary`](.neo/skills/repo-summary/SKILL.md) example. Invoke project
+[`repo-summary`](.hal/skills/repo-summary/SKILL.md) example. Invoke project
 skills in interactive mode:
 
 ```text
-neo> /repo-summary
-neo> Use $repo-summary to explain this repository.
+hal> /repo-summary
+hal> Use $repo-summary to explain this repository.
 ```
 
 `/name arguments` injects one skill and labels the trailing text as arguments.
 `$name` references can expand multiple skills once each in mention order. Skill
-expansion currently occurs only in interactive mode; `neo run` advertises the
+expansion currently occurs only in interactive mode; `hal run` advertises the
 catalog but does not expand `/name` or `$name` invocations.
 
 ### Project instructions (`AGENTS.md`)
 
 `AGENTS.md` provides repository guidance that applies automatically; unlike a
-skill, the user does not invoke it. Neo loads `~/.neo/AGENTS.md` first, then
+skill, the user does not invoke it. HAL loads legacy `~/.neo/AGENTS.md`, then
+`~/.hal/AGENTS.md`, then
 project `AGENTS.md` files from the workspace root down to the current directory,
 with more specific files appearing later in the prompt.
 
@@ -249,7 +255,7 @@ example suffix is intentional: it demonstrates the convention without changing
 this repository's active agent instructions.
 
 The model can call the coding and Git tools listed above. Like the Go
-implementation, Neo is not a security sandbox. Run it inside
+implementation, HAL is not a security sandbox. Run it inside
 an environment whose filesystem, process, network, and credential access match
 your trust requirements. `tool_approvals` adds optional interactive confirmation
 for exact tool names and shell-command prefixes; it is user-interface friction,
@@ -270,7 +276,7 @@ tool_approvals:
 ```
 
 Matching is literal. It does not detect every wrapper, alias, shell chain, or
-indirect package-manager invocation. Headless `neo run` does not use interactive
+indirect package-manager invocation. Headless `hal run` does not use interactive
 approvals, so its prompt must explicitly authorize any intended environment changes.
 
 ## Develop
@@ -290,7 +296,7 @@ The package layout mirrors the Go architecture at a smaller scale:
 
 ## Upstream Attribution
 
-This project is a Python conversion of Neo:
+HAL is based on the Neo coding-agent CLI:
 
 - Upstream project: https://github.com/owainlewis/neo
 - Upstream license: MIT

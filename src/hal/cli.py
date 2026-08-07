@@ -19,28 +19,28 @@ from .sessions import Metadata, Session, SessionStore
 from .tools import BashTool, default_registry, workspace_root
 
 
-USAGE = """neo — a Python coding agent
+USAGE = """HAL — a Python coding agent
 
 USAGE:
-  neo                Interactive chat mode (default)
-  neo chat           Interactive chat mode (explicit)
-  neo run [options] <prompt>
+  hal                Interactive chat mode (default)
+  hal chat           Interactive chat mode (explicit)
+  hal run [options] <prompt>
                      Run one headless prompt and exit
-  neo sessions       List saved chat sessions
-  neo sessions search <query>
+  hal sessions       List saved chat sessions
+  hal sessions search <query>
                      Search saved session transcripts
-  neo doctor         Check local config and environment
-  neo resume <id>    Resume a saved chat session
-  neo version        Show the Neo version (also -v, --version)
-  neo help           Show this help
+  hal doctor         Check local config and environment
+  hal resume <id>    Resume a saved chat session
+  hal version        Show the HAL version (also -v, --version)
+  hal help           Show this help
 
 CONFIG:
-  Reads neo.yaml (cwd) -> ~/.neo/config.yaml -> embedded defaults.
+  Reads hal.yaml -> ~/.hal/config.yaml -> legacy Neo paths -> defaults.
   Providers: anthropic (default), openai, openrouter, or google.
 
 HEADLESS RUN:
-  neo run --json --timeout 10m "Review this repo without changing files"
-  cat prompt.md | neo run --json
+  hal run --json --timeout 10m "Review this repo without changing files"
+  cat prompt.md | hal run --json
 """
 
 
@@ -90,8 +90,8 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
 
 def run_headless(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO) -> int:
     if any(x == "--permission" or x.startswith("--permission=") for x in args):
-        print("--permission has been removed; run Neo inside a sandbox and use tool_approvals for optional interactive confirmations", file=stderr); return 2
-    parser = argparse.ArgumentParser(prog="neo run", add_help=True)
+        print("--permission has been removed; run HAL inside a sandbox and use tool_approvals for optional interactive confirmations", file=stderr); return 2
+    parser = argparse.ArgumentParser(prog="hal run", add_help=True)
     parser.add_argument("--json", action="store_true", dest="json_output")
     parser.add_argument("--timeout", type=_duration, default=600.0)
     parser.add_argument("prompt", nargs="*")
@@ -101,7 +101,7 @@ def run_headless(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO)
     if not stdin.isatty() and (piped := stdin.read().strip()): parts.insert(0, piped)
     prompt = " ".join(parts).strip()
     if not prompt:
-        print("neo run: missing prompt", file=stderr); return 2
+        print("hal run: missing prompt", file=stderr); return 2
     started = time.monotonic(); cwd = Path.cwd(); cfg = _load(cwd, stderr)
     if cfg is None: return 1
     calls = errors = 0
@@ -121,7 +121,7 @@ def run_headless(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO)
     result.update(elapsed_ms=int((time.monotonic() - started) * 1000), tool_calls=calls, tool_errors=errors)
     if options.json_output: print(json.dumps(result), file=stdout)
     elif result["ok"]: print(result.get("final", ""), file=stdout)
-    else: print(f"neo run: {result.get('error', 'failed')}", file=stderr)
+    else: print(f"hal run: {result.get('error', 'failed')}", file=stderr)
     return 0 if result["ok"] else 1
 
 
@@ -148,7 +148,7 @@ def run_sessions(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
             print("ID\tUPDATED\tMODEL\tCWD\tTITLE\tMATCH", file=stdout)
             for x, excerpt in results: print(f"{x.id}\t{x.updated_at[:16].replace('T', ' ')}\t{x.model}\t{_short(x.cwd)}\t{x.title or '(untitled)'}\t{excerpt}", file=stdout)
             return 0
-        print("usage: neo sessions [search <query>]", file=stderr); return 2
+        print("usage: hal sessions [search <query>]", file=stderr); return 2
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"sessions: {exc}", file=stderr); return 1
 
@@ -202,10 +202,10 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
         agent, skills, phases = _make_agent(cfg, cwd, session, interactive=True, out=stdout, err=stderr)
         if session is None:
             session = store.create(Metadata(cwd=str(cwd), model=cfg.model, provider=cfg.provider, openai_auth=cfg.openai_auth if cfg.provider == "openai" else ""))
-        print(f"Neo Python · {cfg.provider}/{cfg.model} · {cwd}", file=stdout)
+        print(f"HAL · {cfg.provider}/{cfg.model} · {cwd}", file=stdout)
         print("Type /help for commands; Ctrl-D or /exit to quit.", file=stdout)
         while True:
-            try: text = input("neo> ").strip()
+            try: text = input("hal> ").strip()
             except (EOFError, KeyboardInterrupt): print(file=stdout); break
             if not text: continue
             if text in {"/exit", "/quit"}: break
@@ -264,9 +264,9 @@ def main(argv: list[str] | None = None, stdin: TextIO = sys.stdin, stdout: TextI
     if command == "sessions": return run_sessions(rest, stdout, stderr)
     if command == "doctor": return run_doctor(stdout)
     if command == "resume":
-        if not rest: print("usage: neo resume <session-id>", file=stderr); return 2
+        if not rest: print("usage: hal resume <session-id>", file=stderr); return 2
         return run_chat(stdout, stderr, rest[0])
-    if command in {"version", "-v", "--version"}: print(f"neo version {__version__}", file=stdout); return 0
+    if command in {"version", "-v", "--version"}: print(f"hal version {__version__}", file=stdout); return 0
     if command in {"help", "-h", "--help"}: print(USAGE, file=stdout); return 0
     if command == "login": print("login: ChatGPT subscription auth is not supported by the Python port; configure openai_auth: api_key", file=stderr); return 1
     if command == "logout": print("logout: no Python-port subscription credentials are stored", file=stdout); return 0

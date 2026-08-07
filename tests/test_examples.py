@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from neo.context import load_skills
+from hal.context import load_skills
 
 
 def test_bundled_repo_summary_skill_is_discoverable() -> None:
@@ -9,6 +9,7 @@ def test_bundled_repo_summary_skill_is_discoverable() -> None:
     skill = next(item for item in skills if item.name == "repo-summary")
     assert "evidence-based overview" in skill.description
     assert "tests/*.py" in skill.body
+    assert ".hal" in str(skill.path)
 
 
 def test_agents_example_uses_the_expected_filename_convention() -> None:

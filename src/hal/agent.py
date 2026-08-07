@@ -152,7 +152,7 @@ class Agent:
                         "provider response was truncated at the token limit", partial
                     ))
                 # pause_turn explicitly asks for another provider response. A
-                # tool_use stop without calls is also replayed, matching Neo's
+                # tool_use stop without calls is also replayed, matching HAL's
                 # provider-neutral loop instead of silently treating it as done.
                 continue
 

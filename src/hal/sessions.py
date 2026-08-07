@@ -36,7 +36,12 @@ class Session:
 
 class SessionStore:
     def __init__(self, directory: Path | None = None) -> None:
-        self.directory = directory or Path.home() / ".neo" / "sessions"
+        if directory is not None:
+            self.directory = directory
+            self.legacy_directory: Path | None = None
+        else:
+            self.directory = Path.home() / ".hal" / "sessions"
+            self.legacy_directory = Path.home() / ".neo" / "sessions"
 
     def create(self, metadata: Metadata) -> Session:
         now = _now(); metadata.id = metadata.id or f"sess_{secrets.token_hex(8)}"
@@ -47,6 +52,8 @@ class SessionStore:
         if not session_id.strip() or "/" in session_id or "\\" in session_id:
             raise ValueError(f"invalid session id {session_id!r}")
         path = self.directory / f"{session_id}.json"
+        if not path.is_file() and self.legacy_directory is not None:
+            path = self.legacy_directory / f"{session_id}.json"
         if not path.is_file(): raise FileNotFoundError(f"session not found: {session_id}")
         data = json.loads(path.read_text(encoding="utf-8")); meta = data.get("metadata") or {}
         return Session(Metadata(**{k: v for k, v in meta.items() if k in Metadata.__dataclass_fields__}), [Message.from_dict(x) for x in data.get("messages", [])], Usage(**data.get("usage", {})))
@@ -57,15 +64,22 @@ class SessionStore:
         self.directory.mkdir(parents=True, exist_ok=True)
         payload = {"metadata": asdict(meta), "messages": [x.to_dict() for x in session.messages], "usage": asdict(session.usage)}
         self._atomic(self.directory / f"{meta.id}.json", payload)
-        index = self._read_index(); items = index.setdefault("sessions", [])
+        index = self._read_index(self.directory); items = index.setdefault("sessions", [])
         for idx, item in enumerate(items):
             if item.get("id") == meta.id: items[idx] = asdict(meta); break
         else: items.append(asdict(meta))
         self._atomic(self.directory / "index.json", index)
 
     def list(self) -> list[Metadata]:
-        items = self._read_index().get("sessions", [])
-        return sorted((Metadata(**{k: v for k, v in x.items() if k in Metadata.__dataclass_fields__}) for x in items), key=lambda x: x.updated_at, reverse=True)
+        by_id: dict[str, Metadata] = {}
+        directories = ([self.legacy_directory] if self.legacy_directory is not None else []) + [self.directory]
+        for directory in directories:
+            for item in self._read_index(directory).get("sessions", []):
+                metadata = Metadata(**{
+                    k: v for k, v in item.items() if k in Metadata.__dataclass_fields__
+                })
+                by_id[metadata.id] = metadata
+        return sorted(by_id.values(), key=lambda x: x.updated_at, reverse=True)
 
     def search(self, query: str) -> list[tuple[Metadata, str]]:
         needle = query.strip().lower()
@@ -81,8 +95,8 @@ class SessionStore:
                 results.append((session.metadata, ("..." if start else "") + excerpt + ("..." if end < len(text) else "")))
         return results
 
-    def _read_index(self) -> dict:
-        path = self.directory / "index.json"
+    def _read_index(self, directory: Path | None = None) -> dict:
+        path = (directory or self.directory) / "index.json"
         if not path.is_file(): return {"sessions": []}
         return json.loads(path.read_text(encoding="utf-8"))
 
