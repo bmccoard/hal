@@ -13,7 +13,7 @@ from typing import TextIO
 
 from . import __version__
 from .agent import Agent, Event, EventKind
-from .cancellation import CancelledError, CancellationToken
+from .cancellation import CancelledError, CancellationToken, cancel_on_sigint
 from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
 from .providers import ProviderError, create_provider
@@ -210,18 +210,44 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
             if text == "/clear": agent.messages.clear(); agent.usage = type(agent.usage)(); print("Conversation cleared.", file=stdout); continue
             if text.startswith("/model "): agent.model = text[7:].strip(); session.metadata.model = agent.model; print(f"Model: {agent.model}", file=stdout); continue
             if text.startswith("!"):
+                cancellation = CancellationToken()
                 try:
-                    print(BashTool(cwd).run({"command": text[1:].strip()}), file=stdout)
+                    with cancel_on_sigint(cancellation):
+                        result = BashTool(cwd).run(
+                            {"command": text[1:].strip()}, cancellation,
+                        )
+                    print(result, file=stdout)
+                except CancelledError as exc:
+                    print(f"interrupted: {exc}", file=stderr)
                 except (OSError, ValueError, RuntimeError) as exc:
                     print(f"error: {exc}", file=stderr)
                 continue
             expanded, display = expand_user_input(text, skills, phases)
-            try: agent.send(expanded, display); print(file=stdout)
-            except (ProviderError, OSError, ValueError, RuntimeError) as exc: print(f"error: {exc}", file=stderr)
-            session.messages, session.usage = agent.messages, agent.usage; store.save(session)
-        session.messages, session.usage = agent.messages, agent.usage; store.save(session); return 0
+            cancellation = CancellationToken()
+            try:
+                with cancel_on_sigint(cancellation):
+                    agent.send(expanded, display, cancellation)
+                print(file=stdout)
+            except CancelledError as exc:
+                print(f"interrupted: {exc}", file=stderr)
+            except (ProviderError, OSError, ValueError, RuntimeError) as exc:
+                print(f"error: {exc}", file=stderr)
+            _save_live_session(store, session, agent, stderr)
+        return 0 if _save_live_session(store, session, agent, stderr) else 1
     except (ProviderError, OSError, ValueError, json.JSONDecodeError) as exc:
         print(f"chat: {exc}", file=stderr); return 1
+
+
+def _save_live_session(store: SessionStore, session: Session, agent: Agent,
+                       stderr: TextIO) -> bool:
+    """Snapshot live agent state without discarding it when persistence fails."""
+    session.messages, session.usage = agent.messages, agent.usage
+    try:
+        store.save(session)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"error: could not save session: {exc}", file=stderr)
+        return False
+    return True
 
 
 def main(argv: list[str] | None = None, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr: TextIO = sys.stderr) -> int:

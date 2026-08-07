@@ -159,6 +159,11 @@ Interactive mode supports `/help`, `/clear`, `/model <id>`, `/exit`, the built-i
 `/design`, `/plan`, `/build`, and `/review` phases, discovered skill commands,
 and `!command` for a direct local shell command.
 
+While a model turn or direct `!command` is active, Ctrl-C cancels that operation
+and returns to the `neo>` prompt. Neo completes any required cancelled/skipped
+tool results before saving the session, so resumed provider transcripts remain
+structurally valid. Ctrl-C while Neo is waiting at the prompt exits normally.
+
 ### Skills
 
 Skills are reusable prompt instructions, not executable tools. Neo discovers:

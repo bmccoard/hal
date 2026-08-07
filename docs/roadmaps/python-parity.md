@@ -6,7 +6,7 @@
 | Target | `neo-py` |
 | Last reviewed | 2026-08-06 |
 | Current milestone | Phase 1 - core correctness and safety |
-| Next work | Interactive signal handling and safe session persistence on cancellation |
+| Next work | Stream and bound tool output before buffering it in memory |
 
 Audit basis: compared `neo-py` with the Go `neo` tree and its developer docs on
 2026-08-06. The Python port has the basic provider-neutral loop, four API-key
@@ -31,7 +31,7 @@ tests, or documentation recorded in the implementation log.
 
 ## Phase 1 - Core loop, cancellation, and safety foundation
 
-- [ ] Introduce cancellation-aware provider and tool interfaces plus a richer event
+- [x] Introduce cancellation-aware provider and tool interfaces plus a richer event
   model (assistant text/commentary, tool call/result, parallel group, steering,
   max-turn, error, and done events with timing and call identity).
   - [x] Replace string/dictionary callbacks with typed events carrying tool-call
@@ -50,7 +50,7 @@ tests, or documentation recorded in the implementation log.
   unknown reasons; return partial text with typed truncation/max-turn errors.
 - [x] Make `neo run --timeout` a true wall-clock deadline covering retries, provider
   calls, tools, and the complete agent loop rather than only shortening one HTTP call.
-- [ ] Add signal handling and cancellation propagation. Interrupt provider requests,
+- [x] Add signal handling and cancellation propagation. Interrupt provider requests,
   shell process trees, searches, reads, and pending calls without corrupting history.
 - [ ] Stream/bound tool output before it can consume unbounded memory. Include useful
   truncation metadata and preserve both the beginning and end of shell output.
@@ -211,6 +211,7 @@ tests, or documentation recorded in the implementation log.
 | 2026-08-06 | Add host/native-shell context, read-only action policy, dependency policy, approval guidance, and cross-shell tests | `src/neo/context.py`, `src/neo/tools.py`, `tests/test_context.py`, `tests/test_tools.py`, `README.md`, `neo.yaml.example` | Full suite: 44 passed |
 | 2026-08-07 | Add typed agent events with commentary/text separation, call identity, timing, and structured failures | `src/neo/agent.py`, `src/neo/cli.py`, `tests/test_agent.py` | Full suite: 45 passed; Windows help/version smoke passed |
 | 2026-08-07 | Propagate cooperative cancellation and deadlines through the core loop, provider I/O/retries, tools, and headless mode; preserve cancelled tool transcripts and terminate shell process trees | `src/neo/cancellation.py`, `src/neo/agent.py`, `src/neo/providers.py`, `src/neo/tools.py`, `src/neo/cli.py`, `tests/test_agent.py`, `tests/test_providers.py`, `tests/test_tools.py`, `tests/test_cli.py`, `README.md` | Full suite: 49 passed; compileall and Windows help/version/shell-cancellation smoke passed |
+| 2026-08-07 | Convert interactive SIGINT into active-turn cancellation, restore idle Ctrl-C behavior, save valid cancelled transcripts, and retain live state after save failures | `src/neo/cancellation.py`, `src/neo/cli.py`, `tests/test_cli.py`, `README.md` | Full suite: 51 passed; compileall and Windows help/version smoke passed |
 
 ## Final parity gate
 
