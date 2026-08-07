@@ -58,6 +58,22 @@ tests, or documentation recorded in the implementation log.
   symlink swap cannot escape the workspace; retain safe in-workspace symlinks.
 - [ ] Apply `tool_approvals` to direct `!command` execution as well as model tool calls,
   and keep approval matching literal, case-sensitive, and interactive-only.
+- [ ] Implement the accepted [agent behavior and platform-awareness design](../designs/agent-behavior.md):
+  inject OS, selected shell/version, cwd, and path conventions into a generated
+  runtime-context block instead of letting models infer Bash from the tool name.
+- [ ] Add a system-prompt action policy: questions, explanations, reviews, and example
+  requests are read-only by default; mutate files or environments only when the user
+  explicitly requests that outcome.
+- [ ] Treat dependency installation, upgrade, and removal as material environment
+  changes requiring an explicit request. When authorized, use the intended interpreter
+  and update project dependency metadata where appropriate.
+- [ ] Add documented optional approval examples for `pip`, `python -m pip`,
+  `py -m pip`, `write_file`, and `edit_file`, including the limits of literal matching.
+- [ ] Add Windows PowerShell 5.1, PowerShell 7, Bash, and POSIX-shell tests covering
+  generated runtime context, tool commands, and user-facing command examples.
+- [ ] Add centralized recursive secret redaction for configuration inspection,
+  diagnostics, provider errors, and structured logs; cover custom profiles and nested
+  credentials with fictional test values.
 - [ ] Expand core tests substantially: malformed tool calls, unknown tools, denials,
   failures, truncation, cancellation at every boundary, max turns, all stop reasons,
   transcript ordering, symlink races, large files/lines, and shell child cleanup.

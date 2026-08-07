@@ -7,6 +7,7 @@ plans that are safe to keep in the repository.
 
 | Initiative | Design | Roadmap | Status | Next milestone |
 | --- | --- | --- | --- | --- |
+| Agent behavior and platform awareness | [Behavior design](designs/agent-behavior.md) | [Python parity](roadmaps/python-parity.md) | Accepted; not implemented | Add runtime context and mutation-intent policy |
 | Go/Python capability parity | The Go implementation is the current reference | [Python parity](roadmaps/python-parity.md) | In progress | Cancellation-aware provider and tool interfaces |
 | Organization-system integration | [Integration design](designs/organization-integration.md) | [Integration roadmap](roadmaps/organization-integration.md) | Direction accepted; not started | Select the separate project name and contract |
 
