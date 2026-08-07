@@ -63,16 +63,18 @@ but changing them does not currently alter runtime behavior.
 The reserved settings should be tracked as implementation work in the issue
 tracker before being described as supported features.
 
-This local setup keeps both model selection and its token in the ignored
-`neo.yaml`:
+Keep model selection in `neo.yaml` and put credentials in the ignored `.env` file.
+This reduces the chance that routine configuration inspection displays a token:
 
 ```yaml
 provider: openrouter
 model: openai/gpt-4o-mini
-api_key: replace-with-your-openrouter-token
 ```
 
-Environment variables remain supported for installations that prefer them.
+```dotenv
+OPENROUTER_API_KEY=replace-with-your-openrouter-token
+```
+
 When an OpenRouter configuration omits `model`, `OPENROUTER_MODEL` is used
 before the built-in default.
 
@@ -88,7 +90,7 @@ providers:
     provider: openai
     model: example.organization.language-model.gpt-5
     apiBase: https://llm-gateway.example.com/openai/v1
-    api_key: replace-with-your-enterprise-token
+    api_key_env: ENTERPRISE_LLM_TOKEN
     protocol: chat_completions
     max_tokens_parameter: max_completion_tokens
 ```
@@ -99,8 +101,7 @@ Chat Completions gateways differ on the output-token field. Profiles use
 gateway that rejects `max_tokens`. The setting is restricted to those two field
 names so arbitrary configuration cannot alter unrelated request fields.
 
-Alternatively, omit `api_key` and set the credential for the selected provider
-in the process environment:
+Neo reads provider credentials from `.env` or the process environment:
 
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY`
@@ -210,6 +211,22 @@ an environment whose filesystem, process, network, and credential access match
 your trust requirements. `tool_approvals` adds optional interactive confirmation
 for exact tool names and shell-command prefixes; it is user-interface friction,
 not an authorization boundary.
+
+For example, this configuration asks before common Python package installation
+commands and model file writes:
+
+```yaml
+tool_approvals:
+  - pip
+  - python -m pip
+  - py -m pip
+  - write_file
+  - edit_file
+```
+
+Matching is literal. It does not detect every wrapper, alias, shell chain, or
+indirect package-manager invocation. Headless `neo run` does not use interactive
+approvals, so its prompt must explicitly authorize any intended environment changes.
 
 ## Develop
 

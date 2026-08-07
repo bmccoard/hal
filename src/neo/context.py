@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import platform
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,18 +9,70 @@ from pathlib import Path
 import yaml
 
 from .config import Config
-from .tools import workspace_root
+from .tools import native_shell, native_shell_version, workspace_root
 
 
 SYSTEM_PROMPT = """You are neo, a focused coding agent.
 
-Operate in the user's current working directory. Use the available tools to read files,
-inspect code with bash, and make edits. Prefer small, verified changes. Run tests after
-you change code. When you finish a task, briefly summarize what changed.
+Match the level of action requested by the user. For questions, explanations,
+reviews, diagnoses, and example requests, inspect relevant context when useful but do
+not create or edit files, install dependencies, or otherwise mutate state unless the
+user explicitly asks for that outcome. Requests to build, create, implement, fix, or
+update authorize the smallest coherent in-scope changes needed to complete the task.
+
+Installing, upgrading, or removing dependencies is a material environment change.
+Do it only when the user explicitly requests installation or when an explicitly
+requested implementation cannot be completed without it; in the latter case, explain
+the need and obtain the user's approval first. When installation is authorized, use
+the intended interpreter/environment and update project dependency metadata when the
+dependency belongs to the project.
+
+Operate in the user's current working directory. Use the available tools to inspect
+and, when authorized, modify the project. Prefer small, verified changes. Run tests
+after you change code. When you finish a task, briefly summarize what changed.
 
 Before tool calls, write one short sentence explaining what you are checking or
 changing and why. Do not narrate obvious individual calls or expose private reasoning.
 Issue independent reads, searches, or inspections together in one response."""
+
+
+def runtime_context(cwd: Path, platform_name: str | None = None,
+                    shell_version: str | None = None) -> str:
+    """Describe the actual host and shell so models generate portable commands."""
+    platform_name = platform_name or os.name
+    kind, executable = native_shell(platform_name)
+    version = native_shell_version(kind, executable) if shell_version is None else shell_version
+    if platform_name == "nt":
+        operating_system = "Windows"
+        separator = "\\"
+    else:
+        operating_system = platform.system() or "Unix-like"
+        separator = "/"
+    shell_label = f"{kind} ({executable})"
+    if version:
+        shell_label += f", version {version}"
+    if kind == "Windows PowerShell":
+        guidance = (
+            "Use Windows PowerShell syntax. Do not use Bash utilities or the `&&` "
+            "operator, which Windows PowerShell 5.1 does not support."
+        )
+    elif kind == "PowerShell":
+        guidance = "Use PowerShell syntax and PowerShell-native command examples."
+    elif kind == "Command Prompt":
+        guidance = "Use cmd.exe syntax; do not emit Bash or PowerShell-only commands."
+    else:
+        guidance = "Use the selected Unix shell syntax."
+    return "\n".join([
+        "# Runtime environment",
+        f"- Operating system: {operating_system} ({platform_name})",
+        f"- Working directory: {cwd.resolve()}",
+        f"- Selected native shell: {shell_label}",
+        f"- Native path separator: `{separator}`",
+        "- The model-facing tool is named `bash` for compatibility, but it executes "
+        "the selected native shell above.",
+        f"- {guidance}",
+        "Use this same shell syntax for tool calls and user-facing command examples.",
+    ])
 
 
 @dataclass(slots=True)
@@ -100,7 +154,7 @@ def load_agents_files(cwd: Path, home: Path | None = None) -> list[tuple[Path, s
 
 
 def build_system(config: Config, cwd: Path, skills: list[Skill], phases: dict[str, Phase]) -> str:
-    text = SYSTEM_PROMPT
+    text = SYSTEM_PROMPT + "\n\n" + runtime_context(cwd)
     text += "\n\n# Named phases\n" + "".join(f"\n- `/{p.name}`: {p.description}" for p in phases.values())
     if skills:
         text += "\n\n# Available skills\n" + "".join(f"\n- `${s.name}`" + (f": {s.description}" if s.description else "") for s in skills)

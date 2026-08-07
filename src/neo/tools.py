@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fnmatch
+import functools
 import json
 import os
 import re
@@ -45,16 +46,48 @@ def _atomic_write(path: Path, content: str) -> None:
 
 def shell_argv(command: str, platform: str | None = None) -> list[str]:
     """Select an explicit native shell instead of relying on shell=True."""
+    kind, executable = native_shell(platform)
+    if kind in {"PowerShell", "Windows PowerShell"}:
+        return [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
+    if kind == "Command Prompt":
+        return [executable, "/d", "/s", "/c", command]
+    if kind == "Bash":
+        return [executable, "-lc", command]
+    return [executable, "-c", command]
+
+
+def native_shell(platform: str | None = None) -> tuple[str, str]:
+    """Return the native shell kind and executable selected for tool calls."""
     platform = platform or os.name
     if platform == "nt":
-        executable = shutil.which("pwsh") or shutil.which("powershell")
-        if executable:
-            return [executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]
-        return [os.environ.get("COMSPEC", "cmd.exe"), "/d", "/s", "/c", command]
-    executable = shutil.which("bash")
-    if executable:
-        return [executable, "-lc", command]
-    return [shutil.which("sh") or "/bin/sh", "-c", command]
+        if executable := shutil.which("pwsh"):
+            return "PowerShell", executable
+        if executable := shutil.which("powershell"):
+            return "Windows PowerShell", executable
+        return "Command Prompt", os.environ.get("COMSPEC", "cmd.exe")
+    if executable := shutil.which("bash"):
+        return "Bash", executable
+    return "POSIX shell", shutil.which("sh") or "/bin/sh"
+
+
+@functools.lru_cache(maxsize=8)
+def native_shell_version(kind: str, executable: str) -> str:
+    """Best-effort shell version for the generated runtime context."""
+    if kind in {"PowerShell", "Windows PowerShell"}:
+        command = [
+            executable, "-NoLogo", "-NoProfile", "-NonInteractive",
+            "-Command", "$PSVersionTable.PSVersion.ToString()",
+        ]
+    elif kind in {"Bash", "POSIX shell"}:
+        command = [executable, "--version"]
+    else:
+        command = [executable, "/d", "/c", "ver"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    lines = [line.strip() for line in (result.stdout + result.stderr).splitlines() if line.strip()]
+    return lines[0][:120] if lines else ""
 
 
 class Tool(ABC):

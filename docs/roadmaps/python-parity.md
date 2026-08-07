@@ -58,18 +58,20 @@ tests, or documentation recorded in the implementation log.
   symlink swap cannot escape the workspace; retain safe in-workspace symlinks.
 - [ ] Apply `tool_approvals` to direct `!command` execution as well as model tool calls,
   and keep approval matching literal, case-sensitive, and interactive-only.
-- [ ] Implement the accepted [agent behavior and platform-awareness design](../designs/agent-behavior.md):
+- [x] Implement the runtime-context portion of the accepted [agent behavior and platform-awareness design](../designs/agent-behavior.md):
   inject OS, selected shell/version, cwd, and path conventions into a generated
   runtime-context block instead of letting models infer Bash from the tool name.
-- [ ] Add a system-prompt action policy: questions, explanations, reviews, and example
+- [x] Add a system-prompt action policy: questions, explanations, reviews, and example
   requests are read-only by default; mutate files or environments only when the user
   explicitly requests that outcome.
-- [ ] Treat dependency installation, upgrade, and removal as material environment
-  changes requiring an explicit request. When authorized, use the intended interpreter
-  and update project dependency metadata where appropriate.
-- [ ] Add documented optional approval examples for `pip`, `python -m pip`,
+- [x] Add a system-prompt dependency policy: installation, upgrade, and removal require
+  an explicit request or user approval, use the intended environment, and update
+  project dependency metadata where appropriate.
+- [ ] Decide and implement any deterministic dependency-installation guard needed
+  beyond prompt policy and optional literal approvals, including headless behavior.
+- [x] Add documented optional approval examples for `pip`, `python -m pip`,
   `py -m pip`, `write_file`, and `edit_file`, including the limits of literal matching.
-- [ ] Add Windows PowerShell 5.1, PowerShell 7, Bash, and POSIX-shell tests covering
+- [x] Add Windows PowerShell 5.1, PowerShell 7, Bash, and POSIX-shell tests covering
   generated runtime context, tool commands, and user-facing command examples.
 - [ ] Add centralized recursive secret redaction for configuration inspection,
   diagnostics, provider errors, and structured logs; cover custom profiles and nested
@@ -200,6 +202,7 @@ tests, or documentation recorded in the implementation log.
 | 2026-08-06 | Atomic, mode-preserving file writes and edits | `src/neo/tools.py`, `tests/test_tools.py` | Full suite: 37 passed |
 | 2026-08-06 | Bounded and pageable `read_file` behavior | `src/neo/tools.py`, `tests/test_tools.py` | Full suite: 37 passed |
 | 2026-08-06 | Normalize Chat Completions `stop`, `length`, and tool-call finish reasons | `src/neo/providers.py`, `tests/test_providers.py` | Full suite: 39 passed |
+| 2026-08-06 | Add host/native-shell context, read-only action policy, dependency policy, approval guidance, and cross-shell tests | `src/neo/context.py`, `src/neo/tools.py`, `tests/test_context.py`, `tests/test_tools.py`, `README.md`, `neo.yaml.example` | Full suite: 44 passed |
 
 ## Final parity gate
 
