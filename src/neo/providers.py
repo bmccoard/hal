@@ -166,6 +166,16 @@ def _chat_messages(messages: list[Message]) -> list[dict[str, Any]]:
     return output
 
 
+def _chat_stop_reason(choice: dict[str, Any], message: dict[str, Any]) -> str:
+    """Normalize Chat Completions finish reasons to Neo's internal protocol."""
+    finish_reason = choice.get("finish_reason", "")
+    if message.get("tool_calls") or finish_reason == "tool_calls":
+        return "tool_use"
+    if finish_reason == "length":
+        return "max_tokens"
+    return "end_turn"
+
+
 class OpenRouterProvider(HTTPProvider):
     name = "openrouter"
 
@@ -190,7 +200,11 @@ class OpenRouterProvider(HTTPProvider):
             fn = call.get("function") or {}
             blocks.append(ContentBlock("tool_use", id=call.get("id", ""), name=fn.get("name", ""), input=json.loads(fn.get("arguments") or "{}")))
         usage = data.get("usage") or {}
-        return Response(blocks, "tool_use" if message.get("tool_calls") else choice.get("finish_reason", "end_turn"), Usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)))
+        return Response(
+            blocks,
+            _chat_stop_reason(choice, message),
+            Usage(usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0)),
+        )
 
 
 class OpenAICompatibleProvider(OpenRouterProvider):

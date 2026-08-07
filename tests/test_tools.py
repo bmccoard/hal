@@ -1,14 +1,96 @@
+import os
 from pathlib import Path
 
 import pytest
 
-from neo.tools import EditFileTool, GrepTool, shell_argv
+from neo.tools import (
+    MAX_RESULT,
+    EditFileTool,
+    GrepTool,
+    ReadFileTool,
+    WriteFileTool,
+    shell_argv,
+)
 
 
 def test_edit_requires_exactly_one_match(tmp_path: Path) -> None:
     path = tmp_path / "a.txt"; path.write_text("x x", encoding="utf-8")
     with pytest.raises(ValueError, match="exactly once"):
         EditFileTool().run({"path": str(path), "old_string": "x", "new_string": "y"})
+
+
+def test_write_and_edit_replace_atomically_and_preserve_mode(tmp_path: Path, monkeypatch) -> None:
+    path = tmp_path / "nested" / "a.txt"
+    path.parent.mkdir()
+    path.write_text("before", encoding="utf-8")
+    path.chmod(0o640)
+    original_replace = os.replace
+    replacements = []
+
+    def record_replace(source, destination):
+        replacements.append((Path(source), Path(destination)))
+        original_replace(source, destination)
+
+    monkeypatch.setattr("neo.tools.os.replace", record_replace)
+    WriteFileTool().run({"path": str(path), "content": "hello world"})
+    EditFileTool().run({
+        "path": str(path), "old_string": "world", "new_string": "Neo",
+    })
+
+    assert path.read_text(encoding="utf-8") == "hello Neo"
+    assert len(replacements) == 2
+    assert all(destination == path for _, destination in replacements)
+    assert not list(path.parent.glob(".a.txt.*"))
+    if os.name != "nt":
+        assert path.stat().st_mode & 0o777 == 0o640
+
+
+def test_file_tools_reject_empty_paths() -> None:
+    with pytest.raises(ValueError, match="path"):
+        ReadFileTool().run({"path": ""})
+    with pytest.raises(ValueError, match="path"):
+        WriteFileTool().run({"path": "", "content": "x"})
+    with pytest.raises(ValueError, match="path"):
+        EditFileTool().run({"path": "", "old_string": "x", "new_string": "y"})
+
+
+def test_read_file_requires_paging_for_oversized_files(tmp_path: Path) -> None:
+    path = tmp_path / "large.txt"
+    path.write_bytes(b"x" * (MAX_RESULT + 1))
+
+    with pytest.raises(ValueError, match="use offset/limit"):
+        ReadFileTool().run({"path": str(path)})
+    with pytest.raises(ValueError, match="selection exceeds"):
+        ReadFileTool().run({"path": str(path), "offset": 1, "limit": 1})
+
+
+def test_read_file_pages_by_one_indexed_line_window(tmp_path: Path) -> None:
+    path = tmp_path / "lines.txt"
+    path.write_bytes(b"first\r\nsecond\nthird")
+
+    assert ReadFileTool().run({
+        "path": str(path), "offset": 2, "limit": 1,
+    }) == "second\n"
+    assert ReadFileTool().run({
+        "path": str(path), "offset": 3,
+    }) == "third"
+    with pytest.raises(ValueError, match="offset 4 is past end"):
+        ReadFileTool().run({"path": str(path), "offset": 4, "limit": 1})
+    with pytest.raises(ValueError, match="offset must be"):
+        ReadFileTool().run({"path": str(path), "offset": 0})
+    with pytest.raises(ValueError, match="limit must be"):
+        ReadFileTool().run({"path": str(path), "limit": 0})
+
+
+def test_read_file_treats_trailing_newline_as_empty_final_line(tmp_path: Path) -> None:
+    path = tmp_path / "trailing.txt"
+    path.write_bytes(b"first\n")
+
+    assert ReadFileTool().run({
+        "path": str(path), "offset": 2, "limit": 1,
+    }) == ""
+    with pytest.raises(ValueError, match="offset 3 is past end"):
+        ReadFileTool().run({"path": str(path), "offset": 3, "limit": 1})
 
 
 def test_grep_rejects_path_outside_workspace(tmp_path: Path) -> None:

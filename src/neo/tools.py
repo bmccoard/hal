@@ -5,7 +5,9 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
+import tempfile
 from abc import ABC, abstractmethod
 from pathlib import Path
 from collections.abc import Callable
@@ -22,6 +24,23 @@ def _bounded(text: str, limit: int = MAX_RESULT) -> str:
         return text
     half = max(1, (limit - 100) // 2)
     return raw[:half].decode("utf-8", "replace") + "\n... output truncated ...\n" + raw[-half:].decode("utf-8", "replace")
+
+
+def _atomic_write(path: Path, content: str) -> None:
+    """Replace a UTF-8 file atomically while retaining its existing mode."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else 0o644
+    descriptor, temp_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temp_name, mode)
+        os.replace(temp_name, path)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
 
 
 def shell_argv(command: str, platform: str | None = None) -> list[str]:
@@ -86,16 +105,71 @@ class ReadFileTool(Tool):
         })
 
     def run(self, arguments: dict[str, Any]) -> str:
-        path = Path(str(arguments.get("path", "")))
-        if not str(path):
+        raw_path = arguments.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
             raise ValueError("path is required")
-        text = path.read_text(encoding="utf-8", errors="replace")
-        lines = text.splitlines(keepends=True)
-        offset = max(1, int(arguments.get("offset", 1)))
-        limit = int(arguments.get("limit", len(lines) or 1))
-        if limit <= 0:
+        path = Path(raw_path)
+        has_window = "offset" in arguments or "limit" in arguments
+        if not has_window:
+            if path.stat().st_size > MAX_RESULT:
+                raise ValueError(
+                    f"read_file: file exceeds {MAX_RESULT} bytes; use offset/limit"
+                )
+            with path.open("rb") as handle:
+                raw = handle.read(MAX_RESULT + 1)
+            if len(raw) > MAX_RESULT:
+                raise ValueError(
+                    f"read_file: file exceeds {MAX_RESULT} bytes; use offset/limit"
+                )
+            return raw.decode("utf-8", "replace")
+
+        offset = int(arguments.get("offset", 1))
+        raw_limit = arguments.get("limit")
+        limit = int(raw_limit) if raw_limit is not None else None
+        if offset <= 0:
+            raise ValueError("offset must be a positive 1-indexed line number")
+        if limit is not None and limit <= 0:
             raise ValueError("limit must be positive")
-        return _bounded("".join(lines[offset - 1:offset - 1 + limit]))
+
+        selected: list[bytes] = []
+        selected_bytes = 0
+        selected_lines = 0
+        line_number = 0
+        last_line_ended_newline = False
+        with path.open("rb") as handle:
+            while limit is None or selected_lines < limit:
+                line = handle.readline(MAX_RESULT + 1)
+                if not line:
+                    break
+                line_number += 1
+                complete = line.endswith(b"\n") or len(line) <= MAX_RESULT
+                if line_number < offset:
+                    while not complete:
+                        line = handle.readline(MAX_RESULT + 1)
+                        if not line:
+                            complete = True
+                        else:
+                            complete = line.endswith(b"\n") or len(line) <= MAX_RESULT
+                    last_line_ended_newline = line.endswith(b"\n")
+                    continue
+                if not complete:
+                    raise ValueError(
+                        f"read_file: selection exceeds {MAX_RESULT} bytes; narrow offset/limit"
+                    )
+                if selected_bytes + len(line) > MAX_RESULT:
+                    raise ValueError(
+                        f"read_file: selection exceeds {MAX_RESULT} bytes; narrow offset/limit"
+                    )
+                selected.append(line)
+                selected_bytes += len(line)
+                selected_lines += 1
+                last_line_ended_newline = line.endswith(b"\n")
+
+        logical_lines = line_number + int(last_line_ended_newline)
+        empty_file_at_first_line = logical_lines == 0 and offset == 1
+        if selected_lines == 0 and offset > logical_lines and not empty_file_at_first_line:
+            raise ValueError(f"read_file: offset {offset} is past end of file")
+        return b"".join(selected).decode("utf-8", "replace")
 
 
 class WriteFileTool(Tool):
@@ -106,12 +180,12 @@ class WriteFileTool(Tool):
         })
 
     def run(self, arguments: dict[str, Any]) -> str:
-        path = Path(str(arguments.get("path", "")))
+        raw_path = arguments.get("path")
         content = arguments.get("content")
-        if not str(path) or not isinstance(content, str):
+        if not isinstance(raw_path, str) or not raw_path or not isinstance(content, str):
             raise ValueError("path and string content are required")
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content, encoding="utf-8")
+        path = Path(raw_path)
+        _atomic_write(path, content)
         return f"wrote {len(content.encode('utf-8'))} bytes to {path}"
 
 
@@ -123,16 +197,17 @@ class EditFileTool(Tool):
         })
 
     def run(self, arguments: dict[str, Any]) -> str:
-        path = Path(str(arguments.get("path", "")))
+        raw_path = arguments.get("path")
         old = arguments.get("old_string")
         new = arguments.get("new_string")
-        if not str(path) or not isinstance(old, str) or not isinstance(new, str) or not old:
+        if not isinstance(raw_path, str) or not raw_path or not isinstance(old, str) or not isinstance(new, str) or not old:
             raise ValueError("path, non-empty old_string, and new_string are required")
+        path = Path(raw_path)
         text = path.read_text(encoding="utf-8")
         count = text.count(old)
         if count != 1:
             raise ValueError(f"old_string must occur exactly once (found {count})")
-        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+        _atomic_write(path, text.replace(old, new, 1))
         return f"edited {path}"
 
 

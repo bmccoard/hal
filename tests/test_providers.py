@@ -1,6 +1,6 @@
 from neo.config import parse_config
 from neo.models import Message, ContentBlock, Request
-from neo.providers import OpenAICompatibleProvider, create_provider
+from neo.providers import OpenAICompatibleProvider, OpenRouterProvider, create_provider
 
 
 def test_custom_openai_profile_uses_chat_completions_endpoint(monkeypatch) -> None:
@@ -24,6 +24,7 @@ def test_custom_openai_profile_uses_chat_completions_endpoint(monkeypatch) -> No
     monkeypatch.setattr(provider, "_post", fake_post)
     response = provider.complete(Request("internal-model", "system", [Message("user", [ContentBlock("text", text="hello")])], []))
     assert response.content[0].text == "ok"
+    assert response.stop_reason == "end_turn"
     assert captured["url"].endswith("/chat/completions")
     assert captured["headers"]["Authorization"] == "Bearer placeholder-token"
 
@@ -62,3 +63,38 @@ def test_custom_profile_sends_max_completion_tokens(monkeypatch) -> None:
     provider.complete(Request("gpt-5.1", "system", [Message("user", [ContentBlock("text", text="hello")])], [], max_tokens=321))
     assert captured["max_completion_tokens"] == 321
     assert "max_tokens" not in captured
+
+
+def test_chat_completions_normalizes_length_to_max_tokens(monkeypatch) -> None:
+    provider = OpenRouterProvider("placeholder")
+    monkeypatch.setattr(provider, "_post", lambda *_args: {
+        "choices": [{"message": {"content": "partial"}, "finish_reason": "length"}],
+        "usage": {},
+    })
+
+    response = provider.complete(Request(
+        "model", "system", [Message("user", [ContentBlock("text", text="hello")])], [],
+    ))
+
+    assert response.stop_reason == "max_tokens"
+
+
+def test_chat_completions_normalizes_tool_calls(monkeypatch) -> None:
+    provider = OpenRouterProvider("placeholder")
+    monkeypatch.setattr(provider, "_post", lambda *_args: {
+        "choices": [{
+            "message": {"tool_calls": [{
+                "id": "call-1", "type": "function",
+                "function": {"name": "read_file", "arguments": '{"path":"README.md"}'},
+            }]},
+            "finish_reason": "tool_calls",
+        }],
+        "usage": {},
+    })
+
+    response = provider.complete(Request(
+        "model", "system", [Message("user", [ContentBlock("text", text="hello")])], [],
+    ))
+
+    assert response.stop_reason == "tool_use"
+    assert response.content[0].name == "read_file"
