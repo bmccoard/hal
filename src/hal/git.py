@@ -2,12 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-import io
-import os
 from pathlib import Path
 import shutil
-import signal
-import subprocess
 from typing import Protocol
 
 from dulwich import porcelain
@@ -16,6 +12,7 @@ from dulwich.index import IndexEntry
 from dulwich.repo import Repo
 
 from .cancellation import CancelledError, CancellationToken, cancellation_or_default
+from .process import BoundedOutput, DEFAULT_OUTPUT_LIMIT, ProcessResult, run_bounded_process
 
 
 class GitError(RuntimeError):
@@ -89,38 +86,6 @@ def normalize_paths(root: Path, values: object) -> list[str]:
     return normalized
 
 
-def _terminate(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        taskkill = shutil.which("taskkill")
-        if taskkill:
-            try:
-                subprocess.run(
-                    [taskkill, "/PID", str(process.pid), "/T", "/F"],
-                    capture_output=True, text=True, timeout=5,
-                )
-            except (OSError, subprocess.SubprocessError):
-                process.terminate()
-        else:
-            process.terminate()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-    try:
-        process.wait(timeout=.5)
-    except subprocess.TimeoutExpired:
-        if os.name == "nt":
-            process.kill()
-        else:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-
-
 class NativeGitBackend:
     name = "native"
 
@@ -129,32 +94,12 @@ class NativeGitBackend:
         self.executable = executable
 
     def _run(self, arguments: list[str], cancellation: CancellationToken | None = None,
-             check: bool = True) -> subprocess.CompletedProcess[str]:
+             check: bool = True) -> ProcessResult:
         cancellation = cancellation_or_default(cancellation)
-        cancellation.raise_if_cancelled()
-        kwargs: dict[str, object] = {}
-        if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            kwargs["start_new_session"] = True
-        process = subprocess.Popen(
-            [self.executable, *arguments], cwd=self.root,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            encoding="utf-8", errors="replace", **kwargs,
+        result = run_bounded_process(
+            [self.executable, *arguments], self.root, cancellation,
+            output_limit=DEFAULT_OUTPUT_LIMIT,
         )
-        try:
-            while True:
-                cancellation.raise_if_cancelled()
-                try:
-                    stdout, stderr = process.communicate(timeout=.1)
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-        except CancelledError:
-            _terminate(process)
-            process.communicate()
-            raise
-        result = subprocess.CompletedProcess(process.args, process.returncode, stdout, stderr)
         if check and result.returncode:
             detail = (result.stderr or result.stdout).strip()
             raise GitError(detail or f"git exited with status {result.returncode}")
@@ -182,7 +127,10 @@ class NativeGitBackend:
             raise GitError(f"not a Git repository: {self.root}")
 
     def _names(self, arguments: list[str], cancellation: CancellationToken | None) -> list[str]:
-        output = self._run(arguments, cancellation).stdout
+        result = self._run(arguments, cancellation)
+        if result.stdout_truncated:
+            raise GitError("Git path output exceeded the safety limit; narrow the workspace scope")
+        output = result.stdout
         return sorted({value.replace("\\", "/") for value in output.split("\0") if value})
 
     def status(self, cancellation: CancellationToken | None = None) -> GitStatus:
@@ -236,6 +184,8 @@ class NativeGitBackend:
             "log", f"--max-count={count}",
             "--format=%H%x1f%an%x1f%ae%x1f%aI%x1f%s",
         ], cancellation, check=False)
+        if result.stdout_truncated:
+            raise GitError("Git log output exceeded the safety limit; request fewer commits")
         if result.returncode:
             raise GitError((result.stderr or result.stdout).strip())
         commits: list[GitCommit] = []
@@ -373,10 +323,10 @@ class DulwichGitBackend:
              cancellation: CancellationToken | None = None) -> str:
         cancellation = cancellation_or_default(cancellation)
         cancellation.raise_if_cancelled()
-        output = io.BytesIO()
+        output = BoundedOutput(DEFAULT_OUTPUT_LIMIT)
         porcelain.diff(self.root, staged=staged, paths=paths, outstream=output)
         cancellation.raise_if_cancelled()
-        return output.getvalue().decode("utf-8", "replace")
+        return output.text()
 
     def log(self, count: int = 10,
             cancellation: CancellationToken | None = None) -> list[GitCommit]:
@@ -435,7 +385,8 @@ class DulwichGitBackend:
         branch = branch or self.status(cancellation).branch
         if branch == "(detached)":
             raise GitError("cannot push a detached HEAD without an explicit branch")
-        output, errors = io.BytesIO(), io.BytesIO()
+        output = BoundedOutput(DEFAULT_OUTPUT_LIMIT)
+        errors = BoundedOutput(DEFAULT_OUTPUT_LIMIT)
         try:
             porcelain.push(
                 self.root, remote_location=remote,
@@ -445,7 +396,7 @@ class DulwichGitBackend:
         except CancelledError:
             raise
         except Exception as exc:
-            detail = errors.getvalue().decode("utf-8", "replace").strip()
+            detail = errors.text().strip()
             raise GitError(detail or str(exc)) from exc
         cancellation.raise_if_cancelled()
         return f"pushed {branch} to {remote}"

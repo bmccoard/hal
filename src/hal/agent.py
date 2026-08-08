@@ -9,7 +9,7 @@ from typing import NoReturn
 from .cancellation import CancelledError, CancellationToken, cancellation_or_default
 from .models import ContentBlock, Message, Request, Usage
 from .providers import Provider
-from .tools import MAX_RESULT, Registry
+from .tools import Registry, bound_output
 
 
 class AgentError(RuntimeError):
@@ -181,7 +181,7 @@ class Agent:
                     except Exception as exc:
                         error = True
                         output = str(exc)
-                output = output.encode("utf-8", "replace")[:MAX_RESULT].decode("utf-8", "replace")
+                output = bound_output(output)
                 results.append(ContentBlock("tool_result", tool_use_id=call.id, content=output, is_error=error))
                 self._emit(Event(
                     EventKind.TOOL_RESULT, text=output, name=call.name,

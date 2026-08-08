@@ -153,6 +153,13 @@ calls, retry waits, agent loop, and tool calls. When a shell command is active,
 HAL terminates its process tree before returning the timeout error. Durations
 accept seconds or an `s`, `m`, or `h` suffix, such as `30s` or `10m`.
 
+Shell and Git subprocess output is drained continuously into bounded buffers instead
+of being accumulated without limit. HAL retains the beginning and end, caps each
+captured stream at 256 KiB, and inserts the total and omitted byte counts when
+truncation occurs. Timed-out commands retain the same bounded partial output. Native
+Git operations that require a complete path list fail closed when that internal output
+exceeds the limit rather than making commit-safety decisions from truncated data.
+
 ### Commands, tools, skills, and phases
 
 - **CLI commands** are entered in the operating-system shell, such as `hal run`
@@ -242,6 +249,7 @@ and other installation-specific behavior. Dulwich pushes use Dulwich's own trans
 and may require separately available HTTPS or SSH credentials. Both backends read the
 repository's configured author identity; set `user.name` and `user.email` (or the
 corresponding Git author environment variables) before committing.
+Dulwich and native Git diffs use the same bounded head/tail output policy.
 
 ### Skills
 

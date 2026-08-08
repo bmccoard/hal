@@ -4,9 +4,9 @@
 | --- | --- |
 | Status | In progress |
 | Target | `HAL` |
-| Last reviewed | 2026-08-06 |
+| Last reviewed | 2026-08-07 |
 | Current milestone | Phase 1 - core correctness and safety |
-| Next work | Stream and bound tool output before buffering it in memory |
+| Next work | Bring grep/glob schemas and behavior to parity |
 
 Audit basis: compared HAL with the upstream Go Neo tree and its developer docs on
 2026-08-06. The Python port has the basic provider-neutral loop, four API-key
@@ -55,7 +55,7 @@ tests, or documentation recorded in the implementation log.
 - [x] Add structured Git status/diff/log/commit/push tools with native-Git preference,
   automatic Dulwich fallback, explicit backend configuration, local-only "check in"
   semantics, path-scoped commits, and doctor diagnostics.
-- [ ] Stream/bound tool output before it can consume unbounded memory. Include useful
+- [x] Stream/bound tool output before it can consume unbounded memory. Include useful
   truncation metadata and preserve both the beginning and end of shell output.
 - [x] Make `write_file` and `edit_file` atomic and preserve existing file modes.
 - [x] Harden `read_file`: avoid reading an entire large file before applying the cap,
@@ -220,6 +220,7 @@ tests, or documentation recorded in the implementation log.
 | 2026-08-07 | Add compact and verbose session listings, stable short selectors, active-session identification, and in-process interactive resume | `src/hal/sessions.py`, `src/hal/cli.py`, `tests/test_sessions.py`, `tests/test_cli.py`, `README.md` | Full suite: 75 passed; compact and verbose listing smoke tests passed on Windows |
 | 2026-08-07 | Add safe structured repository initialization on `main`, stage/unstage operations, automatic no-binary Dulwich selection, existing-repository refusal, sensitive staging/diff controls, and explicit guidance against Git installation, ad hoc Dulwich scripts, or credential rewriting | `src/hal/git.py`, `src/hal/git_tools.py`, `src/hal/context.py`, `tests/test_git.py`, `tests/test_tools.py`, `tests/test_context.py`, `README.md`, `docs/designs/git-integration.md` | Full suite: 80 passed; native and simulated no-Git Dulwich initialization, stage/unstage, initial commit, and sensitive-diff filtering passed on Windows |
 | 2026-08-07 | Add environment-backed custom provider endpoints through `api_base_env`, retain inline endpoint compatibility, and move private endpoint examples into `.env` | `src/hal/config.py`, `src/hal/providers.py`, `tests/test_config.py`, `tests/test_providers.py`, `README.md`, `hal.yaml.example` | Full suite: 82 passed; environment endpoint resolution, precedence, provider construction, and missing-variable diagnostics passed on Windows |
+| 2026-08-07 | Stream shell and native Git stdout/stderr through fixed-size head/tail buffers, bound Dulwich diff/push output, retain timeout partial output, preserve truncation byte metadata, and fail closed when Git safety parsing is incomplete | `src/hal/process.py`, `src/hal/tools.py`, `src/hal/git.py`, `src/hal/agent.py`, `tests/test_process.py`, `tests/test_git.py`, `README.md` | Full suite: 88 passed; large stdout/stderr, shell, Dulwich diff, timeout, cancellation, and truncated native Git safety tests passed on Windows |
 
 ## Final parity gate
 

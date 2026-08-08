@@ -5,29 +5,26 @@ import functools
 import json
 import os
 import re
-import signal
 import shutil
 import stat
 import subprocess
 import tempfile
-import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from collections.abc import Callable
 from typing import Any
 
-from .cancellation import CancelledError, CancellationToken, cancellation_or_default
+from .cancellation import CancellationToken, cancellation_or_default
 from .models import ToolSpec
+from .process import BoundedOutput, DEFAULT_OUTPUT_LIMIT, ProcessTimeout, run_bounded_process
 
-MAX_RESULT = 256 * 1024
+MAX_RESULT = DEFAULT_OUTPUT_LIMIT
 
 
-def _bounded(text: str, limit: int = MAX_RESULT) -> str:
-    raw = text.encode("utf-8", errors="replace")
-    if len(raw) <= limit:
-        return text
-    half = max(1, (limit - 100) // 2)
-    return raw[:half].decode("utf-8", "replace") + "\n... output truncated ...\n" + raw[-half:].decode("utf-8", "replace")
+def bound_output(text: str, limit: int = MAX_RESULT) -> str:
+    output = BoundedOutput(limit)
+    output.write(text)
+    return output.text()
 
 
 def _atomic_write(path: Path, content: str,
@@ -109,38 +106,6 @@ class Tool(ABC):
             cancellation: CancellationToken | None = None) -> str: ...
 
 
-def _terminate_process_tree(process: subprocess.Popen[str]) -> None:
-    if process.poll() is not None:
-        return
-    if os.name == "nt":
-        taskkill = shutil.which("taskkill")
-        if taskkill:
-            try:
-                subprocess.run(
-                    [taskkill, "/PID", str(process.pid), "/T", "/F"],
-                    capture_output=True, text=True, timeout=5,
-                )
-            except (OSError, subprocess.SubprocessError):
-                process.terminate()
-        else:
-            process.terminate()
-    else:
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            return
-    try:
-        process.wait(timeout=.5)
-    except subprocess.TimeoutExpired:
-        if os.name == "nt":
-            process.kill()
-        else:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-
-
 class BashTool(Tool):
     def __init__(self, cwd: Path, timeout: float = 120) -> None:
         self.cwd = cwd
@@ -160,44 +125,20 @@ class BashTool(Tool):
         if not isinstance(command, str) or not command.strip():
             raise ValueError("command must be a non-empty string")
         timeout = min(float(arguments.get("timeout", self.timeout)), self.timeout)
-        kwargs: dict[str, Any] = {}
-        if os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
-        else:
-            kwargs["start_new_session"] = True
-        process = subprocess.Popen(
-            shell_argv(command), cwd=self.cwd, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, **kwargs,
-        )
-        started = time.monotonic()
         try:
-            while True:
-                cancellation.raise_if_cancelled()
-                remaining = timeout - (time.monotonic() - started)
-                if remaining <= 0:
-                    raise subprocess.TimeoutExpired(process.args, timeout)
-                token_remaining = cancellation.remaining()
-                wait_for = min(.1, remaining)
-                if token_remaining is not None:
-                    wait_for = min(wait_for, max(.001, token_remaining))
-                try:
-                    stdout, stderr = process.communicate(timeout=wait_for)
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-        except (CancelledError, subprocess.TimeoutExpired) as exc:
-            _terminate_process_tree(process)
-            stdout, stderr = process.communicate()
-            if isinstance(exc, CancelledError):
-                raise
-            partial = (stdout or "") + (stderr or "")
+            result = run_bounded_process(
+                shell_argv(command), self.cwd, cancellation,
+                timeout=timeout, output_limit=MAX_RESULT,
+            )
+        except ProcessTimeout as exc:
+            partial = exc.stdout + exc.stderr
             raise RuntimeError(
-                f"command timed out after {timeout:g}s\n{_bounded(partial)}"
+                f"command timed out after {timeout:g}s\n{bound_output(partial)}"
             ) from exc
-        output = (stdout or "") + (stderr or "")
-        if process.returncode:
-            raise RuntimeError(f"command exited with status {process.returncode}\n{_bounded(output)}")
-        return _bounded(output) or "command completed successfully"
+        output = result.stdout + result.stderr
+        if result.returncode:
+            raise RuntimeError(f"command exited with status {result.returncode}\n{bound_output(output)}")
+        return bound_output(output) or "command completed successfully"
 
 
 class ReadFileTool(Tool):
@@ -431,7 +372,7 @@ class Registry:
         cancellation.raise_if_cancelled()
         output = tool.run(arguments, cancellation)
         cancellation.raise_if_cancelled()
-        return _bounded(output)
+        return bound_output(output)
 
 
 def default_registry(cwd: Path, root: Path | None = None, approvals: list[str] | None = None,

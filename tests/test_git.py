@@ -22,6 +22,8 @@ from hal.git_tools import (
     GitStageTool,
     GitUnstageTool,
 )
+from hal.process import ProcessResult
+from hal.tools import MAX_RESULT
 
 
 @pytest.fixture(autouse=True)
@@ -159,6 +161,35 @@ def test_diff_tool_omits_sensitive_staged_content(tmp_path: Path) -> None:
     assert "omitted sensitive paths: neo.yaml" in output
     with pytest.raises(ValueError, match="refusing to display a diff"):
         GitDiffTool(backend).run({"staged": True, "paths": ["neo.yaml"]})
+
+
+def test_dulwich_diff_bounds_large_output_and_preserves_head_and_tail(tmp_path: Path) -> None:
+    root = new_repo(tmp_path)
+    backend = DulwichGitBackend(root)
+    (root / "large.txt").write_text(
+        "BEGIN\n" + "x\n" * MAX_RESULT + "END\n", encoding="utf-8",
+    )
+    porcelain.add(root, paths=["large.txt"])
+
+    output = backend.diff(staged=True)
+
+    assert "BEGIN" in output[:1000]
+    assert "END" in output[-1000:]
+    assert "bytes omitted" in output
+    assert len(output.encode("utf-8")) <= MAX_RESULT
+
+
+def test_native_git_refuses_truncated_path_output(monkeypatch, tmp_path: Path) -> None:
+    backend = NativeGitBackend(tmp_path, "git")
+    monkeypatch.setattr(
+        backend, "_run",
+        lambda *_args, **_kwargs: ProcessResult(
+            ["git"], 0, "partial\0...", "", True, False,
+        ),
+    )
+
+    with pytest.raises(GitError, match="exceeded the safety limit"):
+        backend._names(["status"], None)
 
 
 def test_commit_refuses_unrelated_staged_paths(tmp_path: Path) -> None:
