@@ -280,11 +280,15 @@ def create_provider(config: Config) -> Provider:
     key = config.credential()
     if not key: raise ProviderError(f"no API key is configured; set api_key or {env_name}")
     if profile:
+        api_base = config.api_base()
+        if not api_base:
+            source = profile.api_base_env or "api_base"
+            raise ProviderError(f"{profile.name}: API endpoint is not configured; set {source}")
         if profile.protocol == "chat_completions":
             return OpenAICompatibleProvider(
-                profile.name, key, profile.api_base, profile.max_tokens_parameter
+                profile.name, key, api_base, profile.max_tokens_parameter
             )
         if backend == "openai":
-            return OpenAIProvider(key, f"{profile.api_base.rstrip('/')}/responses")
+            return OpenAIProvider(key, f"{api_base}/responses")
     classes = {"anthropic": AnthropicProvider, "openai": OpenAIProvider, "openrouter": OpenRouterProvider, "google": GoogleProvider}
     return classes[backend](key)

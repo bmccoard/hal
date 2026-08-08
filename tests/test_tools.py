@@ -140,5 +140,6 @@ def test_default_registry_exposes_structured_git_tools(tmp_path: Path) -> None:
         tmp_path, tmp_path, git_backend="dulwich",
     ).specs}
     assert {
-        "git_status", "git_diff", "git_log", "git_commit", "git_push",
+        "git_init", "git_stage", "git_unstage", "git_status", "git_diff",
+        "git_log", "git_commit", "git_push",
     } <= names

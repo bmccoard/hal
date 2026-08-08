@@ -70,6 +70,22 @@ def test_named_provider_profile_accepts_camel_case_api_base() -> None:
     assert config.active_profile().api_base == "https://example.test/openai/v1"
 
 
+def test_named_provider_profile_resolves_api_base_from_environment(monkeypatch) -> None:
+    monkeypatch.setenv("ENTERPRISE_LLM_BASE_URL", "https://private.example.test/v1/")
+    config = parse_config({
+        "provider": "enterprise",
+        "providers": [{
+            "id": "enterprise", "name": "Enterprise", "provider": "openai",
+            "model": "internal-model", "apiBase": "https://fallback.example.test/v1",
+            "apiBaseEnv": "ENTERPRISE_LLM_BASE_URL",
+            "api_key_env": "ENTERPRISE_LLM_TOKEN",
+        }],
+    })
+
+    assert config.active_profile().api_base_env == "ENTERPRISE_LLM_BASE_URL"
+    assert config.api_base() == "https://private.example.test/v1"
+
+
 def test_inline_api_key_takes_precedence_over_environment(monkeypatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "environment-key")
     config = parse_config({"provider": "openrouter", "api_key": "inline-key"})

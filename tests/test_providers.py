@@ -7,16 +7,17 @@ import pytest
 from hal.cancellation import CancelledError, CancellationToken
 from hal.config import parse_config
 from hal.models import Message, ContentBlock, Request
-from hal.providers import OpenAICompatibleProvider, OpenRouterProvider, create_provider
+from hal.providers import ProviderError, OpenAICompatibleProvider, OpenRouterProvider, create_provider
 
 
 def test_custom_openai_profile_uses_chat_completions_endpoint(monkeypatch) -> None:
     monkeypatch.setenv("ENTERPRISE_LLM_TOKEN", "placeholder-token")
+    monkeypatch.setenv("ENTERPRISE_LLM_BASE_URL", "https://example.test/openai/v1")
     config = parse_config({
         "provider": "enterprise",
         "providers": [{
             "id": "enterprise", "name": "Example Enterprise GPT", "provider": "openai",
-            "model": "internal-model", "apiBase": "https://example.test/openai/v1",
+            "model": "internal-model", "api_base_env": "ENTERPRISE_LLM_BASE_URL",
             "api_key_env": "ENTERPRISE_LLM_TOKEN",
         }],
     })
@@ -34,6 +35,22 @@ def test_custom_openai_profile_uses_chat_completions_endpoint(monkeypatch) -> No
     assert response.stop_reason == "end_turn"
     assert captured["url"].endswith("/chat/completions")
     assert captured["headers"]["Authorization"] == "Bearer placeholder-token"
+
+
+def test_custom_profile_reports_missing_endpoint_environment_variable(monkeypatch) -> None:
+    monkeypatch.setenv("ENTERPRISE_LLM_TOKEN", "placeholder-token")
+    monkeypatch.delenv("ENTERPRISE_LLM_BASE_URL", raising=False)
+    config = parse_config({
+        "provider": "enterprise",
+        "providers": [{
+            "id": "enterprise", "name": "Enterprise", "provider": "openai",
+            "model": "internal-model", "api_base_env": "ENTERPRISE_LLM_BASE_URL",
+            "api_key_env": "ENTERPRISE_LLM_TOKEN",
+        }],
+    })
+
+    with pytest.raises(ProviderError, match="set ENTERPRISE_LLM_BASE_URL"):
+        create_provider(config)
 
 
 def test_custom_profile_accepts_inline_key(monkeypatch) -> None:

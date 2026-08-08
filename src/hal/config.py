@@ -26,6 +26,7 @@ class ProviderProfile:
     provider: str
     model: str
     api_base: str = ""
+    api_base_env: str = ""
     api_key: str = ""
     api_key_env: str = ""
     protocol: str = "chat_completions"
@@ -64,6 +65,13 @@ class Config:
                 f"provider profile {self.provider!r} has unsupported "
                 f"max_tokens_parameter {profile.max_tokens_parameter!r}"
             )
+        if profile:
+            for field_name, value in (
+                ("api_base_env", profile.api_base_env),
+                ("api_key_env", profile.api_key_env),
+            ):
+                if value and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+                    raise ValueError(f"provider profile {profile.name!r} has invalid {field_name}")
         if self.openai_auth not in {"api_key", "subscription"}:
             raise ValueError("openai_auth must be 'api_key' or 'subscription'")
         if self.git_backend not in {"auto", "native", "dulwich"}:
@@ -112,6 +120,16 @@ class Config:
             return self.api_key
         return os.environ.get(self.credential_env(), "").strip()
 
+    def api_base(self) -> str:
+        profile = self.active_profile()
+        if profile is None:
+            return ""
+        if profile.api_base_env:
+            value = os.environ.get(profile.api_base_env, "").strip()
+            if value:
+                return value.rstrip("/")
+        return profile.api_base.rstrip("/")
+
 
 def _bool(section: dict[str, Any], name: str, default: bool) -> bool:
     value = section.get(name, default)
@@ -151,6 +169,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
             provider=str(raw.get("provider") or "openai").strip().lower(),
             model=str(raw.get("model") or "").strip(),
             api_base=str(raw.get("api_base") or raw.get("apiBase") or "").strip().rstrip("/"),
+            api_base_env=str(raw.get("api_base_env") or raw.get("apiBaseEnv") or "").strip(),
             api_key=str(raw.get("api_key") or raw.get("apiKey") or "").strip(),
             api_key_env=str(raw.get("api_key_env") or raw.get("apiKeyEnv") or "").strip(),
             protocol=str(raw.get("protocol") or "chat_completions").strip().lower(),

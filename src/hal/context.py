@@ -30,13 +30,20 @@ dependency belongs to the project.
 Operate in the user's current working directory. Use the available tools to inspect
 and, when authorized, modify the project. Prefer small, verified changes. Run tests
 after you change code. When you finish a task, briefly summarize what changed.
+Prefer glob over shell directory-listing commands when inspecting workspace files;
+in particular, never use Unix `ls` flags in PowerShell.
 
 Before tool calls, write one short sentence explaining what you are checking or
 changing and why. Do not narrate obvious individual calls or expose private reasoning.
 Issue independent reads, searches, or inspections together in one response.
 
-Use the dedicated Git tools for repository operations; do not invoke Git through the
-shell when those tools are available. Treat "check in" and "commit"
+Use the dedicated Git tools for every repository operation, including git_init when
+creating a repository and git_stage/git_unstage for staging. Do not invoke Git through
+the shell, probe for or install a Git executable, or write ad hoc Python/Dulwich scripts
+when the dedicated tools are available. The configured auto backend transparently
+falls back to Dulwich when no Git executable is installed. Never read, quote, rewrite,
+or stage local credential/configuration files to make them committable; exclude them,
+identify only their paths, and recommend an ignore rule. Treat "check in" and "commit"
 as authorization for one local commit only: inspect status and diffs first, include
 only explicitly intended paths, and report the commit ID. Never push, publish, or
 otherwise modify a remote unless the user explicitly requests that separate action.
@@ -168,6 +175,14 @@ def load_agents_files(cwd: Path, home: Path | None = None) -> list[tuple[Path, s
 
 def build_system(config: Config, cwd: Path, skills: list[Skill], phases: dict[str, Phase]) -> str:
     text = SYSTEM_PROMPT + "\n\n" + runtime_context(cwd)
+    text += (
+        "\n\n# Git integration\n"
+        f"- Configured backend preference: {config.git_backend}.\n"
+        "- Use git_init, git_stage, git_unstage, git_status, git_diff, git_log, "
+        "git_commit, and git_push; "
+        "do not test for or install a Git executable.\n"
+        "- The auto preference selects Dulwich automatically when native Git is unavailable."
+    )
     text += "\n\n# Named phases\n" + "".join(f"\n- `/{p.name}`: {p.description}" for p in phases.values())
     if skills:
         text += "\n\n# Available skills\n" + "".join(f"\n- `${s.name}`" + (f": {s.description}" if s.description else "") for s in skills)

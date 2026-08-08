@@ -84,9 +84,14 @@ OPENROUTER_API_KEY=replace-with-your-openrouter-token
 When an OpenRouter configuration omits `model`, `OPENROUTER_MODEL` is used
 before the built-in default.
 
-Custom OpenAI-compatible gateways can be defined as named profiles. The example
-below is intentionally fictional; replace every endpoint, model, and credential
-value with values supplied by your organization:
+Custom OpenAI-compatible gateways can be defined as named profiles. Keep private
+endpoint URLs and credentials in `.env`; `hal.yaml` contains only their environment
+variable names:
+
+```dotenv
+ENTERPRISE_LLM_BASE_URL=https://llm-gateway.example.com/openai/v1
+ENTERPRISE_LLM_TOKEN=replace-with-your-enterprise-token
+```
 
 ```yaml
 provider: enterprise
@@ -95,11 +100,16 @@ providers:
     name: Example Enterprise GPT
     provider: openai
     model: example.organization.language-model.gpt-5
-    apiBase: https://llm-gateway.example.com/openai/v1
+    api_base_env: ENTERPRISE_LLM_BASE_URL
     api_key_env: ENTERPRISE_LLM_TOKEN
     protocol: chat_completions
     max_tokens_parameter: max_completion_tokens
 ```
+
+The older inline `api_base` and `apiBase` profile fields remain supported for
+compatibility, but `api_base_env` is recommended when an endpoint is private or
+workplace-specific. Environment values override an inline endpoint when both are
+present.
 
 Chat Completions gateways differ on the output-token field. Profiles use
 `max_tokens` by default for compatibility with older models. Set
@@ -107,7 +117,8 @@ Chat Completions gateways differ on the output-token field. Profiles use
 gateway that rejects `max_tokens`. The setting is restricted to those two field
 names so arbitrary configuration cannot alter unrelated request fields.
 
-HAL reads provider credentials from `.env` or the process environment:
+HAL reads provider credentials and configured private endpoints from `.env` or the
+process environment. Built-in credential names are:
 
 - `ANTHROPIC_API_KEY`
 - `OPENAI_API_KEY`
@@ -146,11 +157,12 @@ accept seconds or an `s`, `m`, or `h` suffix, such as `30s` or `10m`.
 
 - **CLI commands** are entered in the operating-system shell, such as `hal run`
   and `hal doctor`.
-- **Interactive commands** are entered at the `hal>` prompt, such as `/help`,
+- **Interactive commands** are entered at the `HAL>` prompt, such as `/help`,
   `/sessions`, `/resume`, `/clear`, `/model`, and `/exit`.
 - **Tools** are executable capabilities available to the model: `bash`,
-  `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `git_status`,
-  `git_diff`, `git_log`, `git_commit`, and `git_push`.
+  `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `git_init`,
+  `git_stage`, `git_unstage`, `git_status`, `git_diff`, `git_log`, `git_commit`,
+  and `git_push`.
 - **Skills** are reusable instruction documents stored at
   `.hal/skills/<name>/SKILL.md`. They guide the model but do not execute code by
   themselves.
@@ -184,7 +196,7 @@ without exiting. The full `sess_...` ID remains accepted. `!` stays reserved for
 direct shell commands.
 
 While a model turn or direct `!command` is active, Ctrl-C cancels that operation
-and returns to the `hal>` prompt. HAL completes any required cancelled/skipped
+and returns to the `HAL>` prompt. HAL completes any required cancelled/skipped
 tool results before saving the session, so resumed provider transcripts remain
 structurally valid. Ctrl-C while HAL is waiting at the prompt exits normally.
 
@@ -202,19 +214,34 @@ git:
   backend: dulwich  # auto, native, or dulwich
 ```
 
+Asking HAL to create or recreate repository metadata uses `git_init`. The tool
+initializes the current workspace on branch `main` with the configured backend,
+refuses to overwrite an existing or enclosing repository, and reports whether it
+used native Git or Dulwich. HAL instructs the model not to probe for or install
+`git.exe` and not to improvise Python/Dulwich shell scripts when structured Git
+tools are available.
+
+Use `git_stage` and `git_unstage` when explicitly managing the index. Staging
+accepts only explicit paths and refuses known local configuration and credential
+files. Unstaging preserves working files, including a sensitive file that was
+staged outside HAL. `git_diff` omits known sensitive paths even if another process
+put them in the index, so their contents do not enter the model transcript. HAL
+reports the omitted path but must not quote or rewrite its contents merely to make
+it committable.
+
 Asking HAL to "check in" or "commit" changes authorizes one **local commit**. HAL
 must inspect status/diffs first, pass an explicit list of intended paths to
 `git_commit`, and report the resulting commit ID. The commit tool refuses to include
 already-staged files outside that list. It never pushes. Remote changes require a
 separate explicit request such as "push this commit", which uses `git_push`.
 
-Dulwich supports local status, diff, log, staging, commits, and pushes without a Git
-binary. Native Git remains preferred because it inherits the machine's credential
-manager, SSH agent, hooks, signing configuration, and other installation-specific
-behavior. Dulwich pushes use Dulwich's own transport and may require separately
-available HTTPS or SSH credentials. Both backends read the repository's configured
-author identity; set `user.name` and `user.email` (or the corresponding Git author
-environment variables) before committing.
+Dulwich supports repository initialization, local status, diff, log, staging,
+commits, and pushes without a Git binary. Native Git remains preferred because it
+inherits the machine's credential manager, SSH agent, hooks, signing configuration,
+and other installation-specific behavior. Dulwich pushes use Dulwich's own transport
+and may require separately available HTTPS or SSH credentials. Both backends read the
+repository's configured author identity; set `user.name` and `user.email` (or the
+corresponding Git author environment variables) before committing.
 
 ### Skills
 
@@ -249,8 +276,8 @@ This repository includes a working
 skills in interactive mode:
 
 ```text
-hal> /repo-summary
-hal> Use $repo-summary to explain this repository.
+HAL> /repo-summary
+HAL> Use $repo-summary to explain this repository.
 ```
 
 `/name arguments` injects one skill and labels the trailing text as arguments.
@@ -288,6 +315,9 @@ tool_approvals:
   - py -m pip
   - write_file
   - edit_file
+  - git_init
+  - git_stage
+  - git_unstage
   - git_commit
   - git_push
 ```

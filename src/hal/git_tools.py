@@ -10,6 +10,109 @@ from .git import GitBackend, create_git_backend, normalize_paths
 from .models import ToolSpec
 
 
+def sensitive_git_paths(paths: list[str]) -> list[str]:
+    sensitive: list[str] = []
+    for path in paths:
+        normalized = path.replace("\\", "/").casefold()
+        name = Path(normalized).name
+        if (
+            name in {"hal.yaml", "neo.yaml"}
+            or name == ".env" or name.startswith(".env.")
+            or normalized in {".hal/auth.json", ".neo/auth.json"}
+        ):
+            sensitive.append(path)
+    return sensitive
+
+
+def _reject_sensitive(paths: list[str], action: str) -> None:
+    sensitive = sensitive_git_paths(paths)
+    if sensitive:
+        raise ValueError(
+            f"refusing to {action} local configuration or credentials: "
+            + ", ".join(sensitive)
+        )
+
+
+class GitInitTool:
+    parallel_safe = False
+
+    def __init__(self, backend: GitBackend) -> None:
+        self.backend = backend
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            "git_init",
+            "Initialize the current workspace as a new Git repository on main using HAL's configured backend. Use this instead of shell Git or ad hoc Dulwich scripts.",
+            {"type": "object", "properties": {}},
+        )
+
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        branch = self.backend.init(cancellation)
+        return json.dumps({
+            "backend": self.backend.name,
+            "branch": branch,
+            "root": str(self.backend.root),
+            "initialized": True,
+        })
+
+
+class GitStageTool:
+    parallel_safe = False
+
+    def __init__(self, backend: GitBackend) -> None:
+        self.backend = backend
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            "git_stage",
+            "Stage only explicitly listed safe paths. Local config and credential files are refused; omit and ignore them without reading or rewriting their contents.",
+            {
+                "type": "object",
+                "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                },
+                "required": ["paths"],
+            },
+        )
+
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        paths = normalize_paths(self.backend.root, arguments.get("paths"))
+        _reject_sensitive(paths, "stage")
+        self.backend.stage(paths, cancellation)
+        return json.dumps({"backend": self.backend.name, "paths": paths, "staged": True})
+
+
+class GitUnstageTool:
+    parallel_safe = False
+
+    def __init__(self, backend: GitBackend) -> None:
+        self.backend = backend
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            "git_unstage",
+            "Remove explicitly listed paths from the staging area without changing working files.",
+            {
+                "type": "object",
+                "properties": {
+                    "paths": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                },
+                "required": ["paths"],
+            },
+        )
+
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        paths = normalize_paths(self.backend.root, arguments.get("paths"))
+        self.backend.unstage(paths, cancellation)
+        return json.dumps({"backend": self.backend.name, "paths": paths, "staged": False})
+
+
 class GitStatusTool:
     parallel_safe = True
 
@@ -39,7 +142,7 @@ class GitDiffTool:
     def spec(self) -> ToolSpec:
         return ToolSpec(
             "git_diff",
-            "Show unstaged or staged repository changes without modifying them.",
+            "Show unstaged or staged repository changes without modifying them. Sensitive local config is omitted and must not be inspected through another tool.",
             {
                 "type": "object",
                 "properties": {
@@ -56,6 +159,17 @@ class GitDiffTool:
         staged = arguments.get("staged", False)
         if not isinstance(staged, bool):
             raise ValueError("staged must be true or false")
+        if paths is not None:
+            _reject_sensitive(paths, "display a diff for")
+        else:
+            status = self.backend.status(cancellation)
+            candidates = status.staged if staged else status.unstaged
+            omitted = sensitive_git_paths(candidates)
+            if omitted:
+                paths = [path for path in candidates if path not in omitted]
+                output = self.backend.diff(staged, paths, cancellation) if paths else ""
+                prefix = output or "no matching changes"
+                return prefix + "\nomitted sensitive paths: " + ", ".join(omitted)
         output = self.backend.diff(staged, paths, cancellation)
         return output or "no matching changes"
 
@@ -95,7 +209,7 @@ class GitCommitTool:
     def spec(self) -> ToolSpec:
         return ToolSpec(
             "git_commit",
-            "Stage only the explicitly listed paths and create one local commit. Never pushes.",
+            "Stage only explicitly listed safe paths and create one local commit. Never read or rewrite refused config files, and never push.",
             {
                 "type": "object",
                 "properties": {
@@ -112,16 +226,7 @@ class GitCommitTool:
         if not isinstance(message, str) or not message.strip():
             raise ValueError("message must be a non-empty string")
         paths = normalize_paths(self.backend.root, arguments.get("paths"))
-        sensitive = [
-            path for path in paths
-            if Path(path).name.casefold() in {".env", "hal.yaml", "neo.yaml"}
-            or path.casefold() in {".hal/auth.json", ".neo/auth.json"}
-        ]
-        if sensitive:
-            raise ValueError(
-                "refusing to commit local configuration or credentials: "
-                + ", ".join(sensitive)
-            )
+        _reject_sensitive(paths, "commit")
         commit_id = self.backend.commit(message.strip(), paths, cancellation)
         return json.dumps({
             "backend": self.backend.name,
@@ -171,6 +276,7 @@ class GitPushTool:
 def git_tools(root: Path, preference: str = "auto") -> list[object]:
     backend = create_git_backend(root, preference)
     return [
+        GitInitTool(backend), GitStageTool(backend), GitUnstageTool(backend),
         GitStatusTool(backend), GitDiffTool(backend), GitLogTool(backend),
         GitCommitTool(backend), GitPushTool(backend),
     ]

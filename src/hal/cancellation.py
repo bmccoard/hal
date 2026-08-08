@@ -47,11 +47,17 @@ class CancellationToken:
 
     def wait(self, seconds: float) -> None:
         self.raise_if_cancelled()
-        remaining = self.remaining()
-        delay = seconds if remaining is None else min(seconds, remaining)
-        if self._cancelled.wait(max(0.0, delay)):
-            raise CancelledError(self._reason)
-        self.raise_if_cancelled()
+        target = time.monotonic() + max(0.0, seconds)
+        if self.deadline is not None:
+            target = min(target, self.deadline)
+        while True:
+            self.raise_if_cancelled()
+            delay = target - time.monotonic()
+            if delay <= 0:
+                self.raise_if_cancelled()
+                return
+            if self._cancelled.wait(delay):
+                raise CancelledError(self._reason)
 
 
 def cancellation_or_default(value: CancellationToken | None) -> CancellationToken:

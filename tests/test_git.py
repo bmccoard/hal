@@ -13,7 +13,15 @@ from hal.git import (
     create_git_backend,
     normalize_paths,
 )
-from hal.git_tools import GitCommitTool, GitDiffTool, GitLogTool, GitPushTool
+from hal.git_tools import (
+    GitCommitTool,
+    GitDiffTool,
+    GitInitTool,
+    GitLogTool,
+    GitPushTool,
+    GitStageTool,
+    GitUnstageTool,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -37,6 +45,10 @@ def new_repo(tmp_path: Path) -> Path:
 def exercise_local_backend(backend, root: Path) -> None:
     (root / "one.txt").write_text("one\n", encoding="utf-8")
     assert backend.status().untracked == ["one.txt"]
+    backend.stage(["one.txt"])
+    assert backend.status().staged == ["one.txt"]
+    backend.unstage(["one.txt"])
+    assert backend.status().untracked == ["one.txt"]
     commit_id = backend.commit("Add one", ["one.txt"])
     assert len(commit_id) == 40
     assert backend.status().staged == []
@@ -44,6 +56,10 @@ def exercise_local_backend(backend, root: Path) -> None:
     assert backend.status().untracked == []
 
     (root / "one.txt").write_text("two\n", encoding="utf-8")
+    assert "one.txt" in backend.status().unstaged
+    backend.stage(["one.txt"])
+    backend.unstage(["one.txt"])
+    assert backend.status().staged == []
     assert "one.txt" in backend.status().unstaged
     assert "-one" in backend.diff()
     history = backend.log(1)
@@ -70,6 +86,79 @@ def test_auto_backend_falls_back_to_dulwich(monkeypatch, tmp_path: Path) -> None
     assert create_git_backend(tmp_path, "auto").name == "dulwich"
     with pytest.raises(GitError, match="not installed"):
         create_git_backend(tmp_path, "native")
+
+
+def test_dulwich_init_creates_main_without_a_git_executable(monkeypatch, tmp_path: Path) -> None:
+    root = tmp_path / "repo"; root.mkdir()
+    monkeypatch.setattr("hal.git.shutil.which", lambda _name: None)
+    backend = create_git_backend(root, "auto")
+
+    result = json.loads(GitInitTool(backend).run({}))
+
+    assert result == {
+        "backend": "dulwich", "branch": "main", "root": str(root), "initialized": True,
+    }
+    assert backend.status().branch == "main"
+    (root / "README.md").write_text("# New project\n", encoding="utf-8")
+    committed = json.loads(GitCommitTool(backend).run({
+        "message": "Initial commit", "paths": ["README.md"],
+    }))
+    assert backend.log(1)[0].commit == committed["commit"]
+    with pytest.raises(GitError, match="existing Git workspace"):
+        backend.init()
+
+
+def test_native_init_creates_main_when_available(tmp_path: Path) -> None:
+    executable = shutil.which("git")
+    if not executable:
+        pytest.skip("native Git is unavailable")
+    root = tmp_path / "repo"; root.mkdir()
+    backend = NativeGitBackend(root, executable)
+
+    assert backend.init() == "main"
+    assert backend.status().branch == "main"
+
+
+def test_initialized_dulwich_repo_keeps_sensitive_commit_protection(tmp_path: Path) -> None:
+    root = tmp_path / "repo"; root.mkdir()
+    backend = DulwichGitBackend(root)
+    GitInitTool(backend).run({})
+    (root / "neo.yaml").write_text("api_key: secret", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="credentials"):
+        GitCommitTool(backend).run({"message": "Initial commit", "paths": ["neo.yaml"]})
+
+
+def test_stage_tool_rejects_sensitive_paths_and_unstage_preserves_files(tmp_path: Path) -> None:
+    root = new_repo(tmp_path)
+    backend = DulwichGitBackend(root)
+    (root / "safe.txt").write_text("safe", encoding="utf-8")
+    (root / "neo.yaml").write_text("api_key: secret", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="refusing to stage"):
+        GitStageTool(backend).run({"paths": ["safe.txt", "neo.yaml"]})
+    GitStageTool(backend).run({"paths": ["safe.txt"]})
+    assert backend.status().staged == ["safe.txt"]
+    GitUnstageTool(backend).run({"paths": ["safe.txt"]})
+    assert (root / "safe.txt").read_text(encoding="utf-8") == "safe"
+    assert backend.status().staged == []
+
+
+def test_diff_tool_omits_sensitive_staged_content(tmp_path: Path) -> None:
+    root = new_repo(tmp_path)
+    backend = DulwichGitBackend(root)
+    (root / "safe.txt").write_text("public content", encoding="utf-8")
+    secret = "sk-test-secret-that-must-not-reach-the-model"
+    (root / "neo.yaml").write_text(f"api_key: {secret}", encoding="utf-8")
+    porcelain.add(root, paths=["safe.txt", "neo.yaml"])
+
+    output = GitDiffTool(backend).run({"staged": True})
+
+    assert "public content" in output
+    assert secret not in output
+    assert "omitted sensitive paths: neo.yaml" in output
+    with pytest.raises(ValueError, match="refusing to display a diff"):
+        GitDiffTool(backend).run({"staged": True, "paths": ["neo.yaml"]})
 
 
 def test_commit_refuses_unrelated_staged_paths(tmp_path: Path) -> None:

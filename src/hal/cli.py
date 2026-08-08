@@ -236,7 +236,7 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
         print(f"HAL · {cfg.provider}/{cfg.model} · {cwd}", file=stdout)
         print("Type /help for commands; Ctrl-D or /exit to quit.", file=stdout)
         while True:
-            try: text = input("hal> ").strip()
+            try: text = input("HAL> ").strip()
             except (EOFError, KeyboardInterrupt): print(file=stdout); break
             if not text: continue
             if text in {"/exit", "/quit"}: break

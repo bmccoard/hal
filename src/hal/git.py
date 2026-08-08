@@ -12,6 +12,7 @@ from typing import Protocol
 
 from dulwich import porcelain
 from dulwich.errors import NotGitRepository
+from dulwich.index import IndexEntry
 from dulwich.repo import Repo
 
 from .cancellation import CancelledError, CancellationToken, cancellation_or_default
@@ -42,8 +43,13 @@ class GitBackend(Protocol):
     name: str
     root: Path
 
+    def init(self, cancellation: CancellationToken | None = None) -> str: ...
     def is_repository(self, cancellation: CancellationToken | None = None) -> bool: ...
     def status(self, cancellation: CancellationToken | None = None) -> GitStatus: ...
+    def stage(self, paths: list[str],
+              cancellation: CancellationToken | None = None) -> None: ...
+    def unstage(self, paths: list[str],
+                cancellation: CancellationToken | None = None) -> None: ...
     def diff(self, staged: bool = False, paths: list[str] | None = None,
              cancellation: CancellationToken | None = None) -> str: ...
     def log(self, count: int = 10,
@@ -161,6 +167,16 @@ class NativeGitBackend:
         )
         return result.returncode == 0 and result.stdout.strip() == "true"
 
+    def init(self, cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
+        if self.is_repository(cancellation) or (self.root / ".git").exists():
+            raise GitError(f"refusing to initialize an existing Git workspace: {self.root}")
+        self._run(["init", "--quiet"], cancellation)
+        self._run(["symbolic-ref", "HEAD", "refs/heads/main"], cancellation)
+        cancellation.raise_if_cancelled()
+        return "main"
+
     def _require_repository(self, cancellation: CancellationToken | None = None) -> None:
         if not self.is_repository(cancellation):
             raise GitError(f"not a Git repository: {self.root}")
@@ -184,6 +200,22 @@ class NativeGitBackend:
                 ["ls-files", "--others", "--exclude-standard", "-z"], cancellation,
             ),
         )
+
+    def stage(self, paths: list[str],
+              cancellation: CancellationToken | None = None) -> None:
+        self._require_repository(cancellation)
+        self._run(["add", "--", *paths], cancellation)
+
+    def unstage(self, paths: list[str],
+                cancellation: CancellationToken | None = None) -> None:
+        self._require_repository(cancellation)
+        has_head = not self._run(
+            ["rev-parse", "--verify", "HEAD"], cancellation, check=False,
+        ).returncode
+        arguments = (["reset", "--quiet", "HEAD", "--"] if has_head else [
+            "rm", "--cached", "--quiet", "--ignore-unmatch", "--",
+        ])
+        self._run([*arguments, *paths], cancellation)
 
     def diff(self, staged: bool = False, paths: list[str] | None = None,
              cancellation: CancellationToken | None = None) -> str:
@@ -254,6 +286,24 @@ class DulwichGitBackend:
         except NotGitRepository as exc:
             raise GitError(f"not a Git repository: {self.root}") from exc
 
+    def init(self, cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
+        if self.is_repository(cancellation) or (self.root / ".git").exists():
+            raise GitError(f"refusing to initialize an existing Git workspace: {self.root}")
+        try:
+            repo = porcelain.init(self.root)
+            try:
+                repo.refs.set_symbolic_ref(b"HEAD", b"refs/heads/main")
+            finally:
+                repo.close()
+        except CancelledError:
+            raise
+        except Exception as exc:
+            raise GitError(f"could not initialize repository at {self.root}: {exc}") from exc
+        cancellation.raise_if_cancelled()
+        return "main"
+
     def is_repository(self, cancellation: CancellationToken | None = None) -> bool:
         cancellation = cancellation_or_default(cancellation)
         cancellation.raise_if_cancelled()
@@ -277,6 +327,47 @@ class DulwichGitBackend:
         cancellation.raise_if_cancelled()
         staged = [item for group in value.staged.values() for item in group]
         return GitStatus(branch, _paths(staged), _paths(value.unstaged), _paths(value.untracked))
+
+    def stage(self, paths: list[str],
+              cancellation: CancellationToken | None = None) -> None:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
+        self._repo().close()
+        porcelain.add(self.root, paths=paths)
+        cancellation.raise_if_cancelled()
+
+    def unstage(self, paths: list[str],
+                cancellation: CancellationToken | None = None) -> None:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
+        with self._repo() as repo:
+            index = repo.open_index()
+            try:
+                commit = repo[repo.head()]
+                tree = repo[commit.tree]
+            except KeyError:
+                tree = None
+            for path in paths:
+                cancellation.raise_if_cancelled()
+                encoded = path.encode("utf-8")
+                try:
+                    mode, sha = tree.lookup_path(repo.object_store.__getitem__, encoded) if tree else (0, b"")
+                except KeyError:
+                    mode, sha = 0, b""
+                if not sha:
+                    try:
+                        del index[encoded]
+                    except KeyError:
+                        pass
+                    continue
+                # Do not reuse the modified working file's stat metadata for the
+                # restored HEAD object. Zero values force Dulwich to re-hash the
+                # working file and correctly report any remaining unstaged change.
+                blob = repo[sha]
+                entry = IndexEntry(0, 0, 0, 0, mode, 0, 0, len(blob.data), sha)
+                index[encoded] = entry
+            index.write()
+        cancellation.raise_if_cancelled()
 
     def diff(self, staged: bool = False, paths: list[str] | None = None,
              cancellation: CancellationToken | None = None) -> str:

@@ -9,6 +9,7 @@ model: openai/gpt-4o-mini
 # one backend explicitly.
 git:
   backend: auto
+  # backend: dulwich
 
 # Optional interactive confirmations. These are user-interface friction, not a
 # security boundary, and literal prefixes do not detect every indirect command.
@@ -44,7 +45,7 @@ output:
 #     name: Example Enterprise GPT
 #     provider: openai
 #     model: example.organization.language-model.gpt-5
-#     apiBase: https://llm-gateway.example.com/openai/v1
+#     api_base_env: ENTERPRISE_LLM_BASE_URL
 #     api_key_env: ENTERPRISE_LLM_TOKEN
 #     protocol: chat_completions
 #     max_tokens_parameter: max_completion_tokens
