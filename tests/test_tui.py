@@ -111,7 +111,7 @@ def test_tui_portable_submit_and_multiline_keys(tmp_path: Path) -> None:
         async with app.run_test(size=(100, 32)) as pilot:
             composer = app.query_one("#composer")
             composer.text = "two lines"
-            await pilot.press("alt+enter")
+            await pilot.press("f3")
             assert "\n" in composer.text
             assert agent.prompts == []
 

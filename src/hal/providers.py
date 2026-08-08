@@ -94,7 +94,15 @@ class HTTPProvider(Provider):
         if response is None:
             raise AssertionError("unreachable")
         data_lines: list[str] = []
-        remove_cancel_callback = cancellation.add_cancel_callback(response.close)
+
+        def close_response() -> None:
+            try:
+                response.close()
+            except Exception:
+                # Closing is best-effort and may race with a blocked urllib read.
+                pass
+
+        remove_cancel_callback = cancellation.add_cancel_callback(close_response)
         try:
             cancellation.raise_if_cancelled()
             content_type = str(response.headers.get("Content-Type", "")).lower()
@@ -103,7 +111,7 @@ class HTTPProvider(Provider):
                     raw_body = response.read()
                     cancellation.raise_if_cancelled()
                     data = json.loads(raw_body)
-                except (OSError, ValueError) as exc:
+                except Exception as exc:
                     cancellation.raise_if_cancelled()
                     raise ProviderError(
                         f"{self.name}: expected an event stream, received {content_type or 'unknown content type'}"
@@ -115,7 +123,9 @@ class HTTPProvider(Provider):
                 cancellation.raise_if_cancelled()
                 try:
                     raw = response.readline()
-                except OSError as exc:
+                except Exception as exc:
+                    # On Windows, closing a chunked HTTPResponse from the cancel
+                    # callback may surface as AttributeError from fp.peek().
                     cancellation.raise_if_cancelled()
                     raise ProviderError(f"{self.name}: streaming read failed: {exc}") from exc
                 if not raw:
@@ -143,7 +153,7 @@ class HTTPProvider(Provider):
             cancellation.raise_if_cancelled()
         finally:
             remove_cancel_callback()
-            response.close()
+            close_response()
 
     def _post(self, url: str, payload: dict[str, Any], headers: dict[str, str],
               cancellation: CancellationToken | None = None) -> dict[str, Any]:

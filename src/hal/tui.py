@@ -79,7 +79,7 @@ class HalTui(App[int]):
         Binding("enter", "submit", "Send", priority=True),
         Binding("ctrl+enter", "submit", "", show=False, priority=True),
         Binding("f2", "submit", "Send", priority=True),
-        Binding("alt+enter", "insert_newline", "New line", priority=True),
+        Binding("f3", "insert_newline", "New line", priority=True),
         Binding("shift+enter", "insert_newline", "", show=False, priority=True),
         Binding("ctrl+c", "cancel_turn", "Cancel", priority=True),
         Binding("escape", "cancel_turn", "Cancel", priority=True),
@@ -128,7 +128,7 @@ class HalTui(App[int]):
         with Vertical(id="composer-frame"):
             yield TextArea(soft_wrap=True, placeholder="Ask HAL…", id="composer")
             with Horizontal(id="composer-controls"):
-                yield Static("Enter send · Alt/Shift+Enter new line · F2 send", id="composer-hint")
+                yield Static("Enter/F2 send · F3/Shift+Enter new line", id="composer-hint")
                 yield Button("New line", id="newline")
                 yield Button("Cancel", id="cancel", disabled=True)
                 yield Button("Send", id="send", variant="primary")
@@ -143,7 +143,7 @@ class HalTui(App[int]):
 
     def _render_history(self) -> None:
         if not self.session.messages:
-            self._write(Text("HAL is ready. Enter sends; Alt/Shift+Enter adds a line; Ctrl-C or Escape cancels active work.", style="dim"))
+            self._write(Text("HAL is ready. Enter sends; F3 or Shift+Enter adds a line; Ctrl-C or Escape cancels active work.", style="dim"))
             return
         for message in self.session.messages:
             self._render_message(message)

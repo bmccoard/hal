@@ -155,8 +155,9 @@ tests, or documentation recorded in the implementation log.
   layout, selectable text, status line, elapsed time, cwd, branch, provider, and model.
   - [x] Update one live Markdown response card from provider deltas without blocking
     input, status updates, or cancellation.
-  - [x] Provide portable composer controls: Enter and F2 send; Alt/Shift+Enter and a
-    visible button add a line; retain Ctrl+Enter where the terminal delivers it.
+  - [x] Provide portable composer controls: Enter and F2 send; F3, Shift+Enter, and a
+    visible button add a line; retain Ctrl+Enter where the terminal delivers it and
+    avoid the Windows-reserved Alt+Enter combination.
 - [ ] Render live tool activity, concise completed receipts, errors, parallel groups,
   workflow progress, and a visible subagent tree.
 - [ ] Implement `output.verbose`: concise mode by default; hide routine lines such as
@@ -233,8 +234,9 @@ tests, or documentation recorded in the implementation log.
 | 2026-08-07 | Stream shell and native Git stdout/stderr through fixed-size head/tail buffers, bound Dulwich diff/push output, retain timeout partial output, preserve truncation byte metadata, and fail closed when Git safety parsing is incomplete | `src/hal/process.py`, `src/hal/tools.py`, `src/hal/git.py`, `src/hal/agent.py`, `tests/test_process.py`, `tests/test_git.py`, `README.md` | Full suite: 88 passed; large stdout/stderr, shell, Dulwich diff, timeout, cancellation, and truncated native Git safety tests passed on Windows |
 | 2026-08-07 | Add the first Textual terminal-interface slice with a Markdown transcript, multiline composer, live status and tool receipts, background agent work, approvals, cancellation, safe session persistence, resume, verbose output, dependency-aware startup, and basic-REPL fallback | `src/hal/tui.py`, `src/hal/cli.py`, `tests/test_tui.py`, `pyproject.toml`, `README.md`, `docs/designs/terminal-interface.md` | Full suite: 93 passed, including Textual headless UI send/save, clear, cancellation, CLI-selection, and missing-dependency fallback tests; Windows terminal smoke pending |
 | 2026-08-07 | Add provider-neutral interactive streaming across OpenAI Responses, Chat Completions/OpenRouter and enterprise GPT profiles, Anthropic, and Gemini; accumulate tool calls and usage, update one live TUI card, close streams on cancellation, and preserve no-duplicate buffered fallbacks | `src/hal/models.py`, `src/hal/providers.py`, `src/hal/agent.py`, `src/hal/cancellation.py`, `src/hal/cli.py`, `src/hal/tui.py`, `tests/test_providers.py`, `tests/test_agent.py`, `tests/test_config.py`, `tests/test_tui.py`, `README.md`, `hal.yaml.example`, `docs/designs/terminal-interface.md` | Full suite: 106 passed; official protocol documentation cross-check and compile/package checks passed; opt-in live-provider smoke tests pending |
-| 2026-08-07 | Document every active/reserved feature flag and replace Ctrl+Enter-only composition with terminal-portable Enter/F2 send, Alt/Shift+Enter newline, and a visible newline button | `src/hal/tui.py`, `tests/test_tui.py`, `README.md`, `hal.yaml.example`, `docs/designs/terminal-interface.md` | Full suite: 107 passed, including Textual key-routing coverage; compile and package checks passed |
+| 2026-08-07 | Document every active/reserved feature flag and replace Ctrl+Enter-only composition with terminal-portable Enter/F2 send, F3/Shift+Enter newline, and a visible newline button while avoiding Windows-reserved Alt+Enter | `src/hal/tui.py`, `tests/test_tui.py`, `README.md`, `hal.yaml.example`, `docs/designs/terminal-interface.md` | Full suite: 107 passed, including Textual key-routing coverage; compile and package checks passed |
 | 2026-08-07 | Display one randomized HAL quotation at TUI and basic-REPL startup from a shared catalog while preserving headless output | `src/hal/sayings.py`, `src/hal/tui.py`, `src/hal/cli.py`, `tests/test_sayings.py`, `README.md`, `docs/designs/terminal-interface.md` | Full suite: 108 passed; compile and package checks passed |
+| 2026-08-07 | Normalize the Windows `http.client` chunked-read race caused by closing an active SSE response during cancellation and make stream closure idempotent | `src/hal/providers.py`, `tests/test_providers.py` | Full suite: 109 passed, including exact `NoneType.peek` cancellation regression coverage; compile passed |
 
 ## Final parity gate
 

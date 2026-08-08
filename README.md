@@ -180,12 +180,14 @@ These are operating-system shell commands, not model tools or skills:
 test command itself. The model normally fulfills that request with its shell
 tool.
 
-The TUI uses plain `Enter` to send. Use `Alt+Enter`, `Shift+Enter`, or the visible
+The TUI uses plain `Enter` to send. Use `F3`, `Shift+Enter`, or the visible
 **New line** button to add a line; `Ctrl+Enter` and `F2` are additional send
 shortcuts. `Ctrl-C` or `Escape` cancels active work, `Ctrl+L` clears the
 conversation, and `Ctrl+Q` quits safely. Some terminals—especially when VS Code
 has claimed a shortcut—never send modified Enter combinations to terminal apps;
-plain Enter, `F2`, and the buttons remain available in that case.
+plain Enter, `F2`/`F3`, and the buttons remain available in that case. Windows
+console hosts commonly reserve `Alt+Enter` for full-screen mode, so HAL does not
+use or advertise that combination.
 
 Every interactive startup displays one randomly selected HAL quotation. The small,
 central catalog lives in `src/hal/sayings.py`, so startup lines can be reviewed or

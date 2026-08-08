@@ -278,6 +278,33 @@ def test_stream_cancellation_closes_blocking_http_response(monkeypatch) -> None:
     assert time.monotonic() - started < 1
 
 
+def test_stream_cancellation_normalizes_windows_chunked_peek_race(monkeypatch) -> None:
+    provider = OpenRouterProvider("placeholder")
+    closed = threading.Event()
+
+    class RacingResponse:
+        headers = {"Content-Type": "text/event-stream"}
+
+        def readline(self):
+            closed.wait(5)
+            raise AttributeError("'NoneType' object has no attribute 'peek'")
+
+        def close(self):
+            closed.set()
+
+    monkeypatch.setattr("hal.providers.urllib.request.urlopen", lambda *_args, **_kwargs: RacingResponse())
+    cancellation = CancellationToken()
+    timer = threading.Timer(.02, lambda: cancellation.cancel("cancel stream"))
+    timer.start()
+    try:
+        with pytest.raises(CancelledError, match="cancel stream"):
+            list(provider._iter_sse(provider.endpoint, {"stream": True}, {}, cancellation))
+    finally:
+        timer.cancel()
+
+    assert closed.is_set()
+
+
 def test_sse_parser_ignores_comments_and_stops_at_done(monkeypatch) -> None:
     provider = OpenRouterProvider("placeholder")
 

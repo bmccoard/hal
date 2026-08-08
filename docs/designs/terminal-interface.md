@@ -22,8 +22,8 @@ The first slice provides:
 - a scrollable Markdown transcript whose active response card updates incrementally,
   plus restored session history;
 - a multiline composer with portable terminal controls (`Enter` sends;
-  `Alt+Enter`, `Shift+Enter`, or the New line button inserts a newline; `F2` and
-  `Ctrl+Enter` are additional send paths);
+  `F3`, `Shift+Enter`, or the New line button inserts a newline; `F2` and
+  `Ctrl+Enter` are additional send paths; Windows-reserved `Alt+Enter` is avoided);
 - concise tool receipts, with full calls/results when `output.verbose` is enabled;
 - project, Git branch, provider/model, session, and elapsed-work status;
 - `/help`, `/sessions`, `/resume`, `/clear`, `/model`, `/exit`, named phases, skills,
