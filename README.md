@@ -246,7 +246,7 @@ Session listings use these compact columns by default:
 
 ```text
 SHORT     ID                         UPDATED           MODEL                PROJECT
-ae5f63c2  sess_ae5f63c2dd8b4abd    2026-08-07 16:44  laguna-s-2.1:free    neo-py
+ae5f63c2  sess_ae5f63c2dd8b4abd    2026-08-07 16:44  laguna-s-2.1:free    hal
 ```
 
 The eight-character `SHORT` value is a stable prefix of the random session ID,
