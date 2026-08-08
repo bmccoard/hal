@@ -7,7 +7,7 @@ import time
 from typing import NoReturn
 
 from .cancellation import CancelledError, CancellationToken, cancellation_or_default
-from .models import ContentBlock, Message, Request, Usage
+from .models import ContentBlock, Message, Request, StreamDelta, Usage
 from .providers import Provider
 from .tools import Registry, bound_output
 
@@ -104,10 +104,16 @@ class Agent:
         for _ in range(self.max_turns):
             try:
                 cancellation.raise_if_cancelled()
-                response = self.provider.complete(Request(
+                request = Request(
                     model=self.model, system=self.system, messages=list(self.messages),
                     tools=self.tools.specs,
-                ), cancellation)
+                )
+                stream = getattr(self.provider, "stream", None)
+                streamed = callable(stream) and getattr(self.provider, "streaming_enabled", True)
+                if streamed:
+                    response = stream(request, self._emit_delta, cancellation)
+                else:
+                    response = self.provider.complete(request, cancellation)
                 cancellation.raise_if_cancelled()
             except Exception as exc:
                 self._emit(Event(EventKind.ERROR, error=exc))
@@ -119,9 +125,11 @@ class Agent:
                     continue
                 if block.type == "text":
                     final_parts.append(block.text)
-                    self._emit(Event(EventKind.ASSISTANT_TEXT, text=block.text))
+                    if not streamed:
+                        self._emit(Event(EventKind.ASSISTANT_TEXT, text=block.text))
                 elif block.type == "commentary":
-                    self._emit(Event(EventKind.ASSISTANT_COMMENTARY, text=block.text))
+                    if not streamed:
+                        self._emit(Event(EventKind.ASSISTANT_COMMENTARY, text=block.text))
             partial = "\n".join(final_parts).strip()
             calls = [block for block in assistant_blocks if block.type == "tool_use"]
 
@@ -207,6 +215,13 @@ class Agent:
         if self._send_started:
             event.elapsed_ms = int((time.monotonic() - self._send_started) * 1000)
         self.on_event(event)
+
+    def _emit_delta(self, delta: StreamDelta) -> None:
+        kind = (
+            EventKind.ASSISTANT_COMMENTARY
+            if delta.kind == "commentary" else EventKind.ASSISTANT_TEXT
+        )
+        self._emit(Event(kind, text=delta.text))
 
     def _append_safe_assistant(self, blocks: list[ContentBlock]) -> None:
         safe = [block for block in blocks if block.type != "tool_use"]

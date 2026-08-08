@@ -7,6 +7,7 @@ from hal.agent import Agent
 from hal.cli import _save_live_session, main, run_chat, run_headless, run_sessions
 from hal.config import parse_config
 from hal.models import ContentBlock, Response, ToolSpec, Usage
+from hal.sayings import HAL_SAYINGS
 from hal.sessions import Metadata, Session, SessionStore
 from hal.tools import Registry, Tool
 
@@ -27,6 +28,45 @@ def test_unknown_command_returns_usage_error() -> None:
     output, error = io.StringIO(), io.StringIO()
     assert main(["wat"], stdout=output, stderr=error) == 2
     assert "unknown command: wat" in error.getvalue()
+
+
+def test_interactive_cli_selects_tui_for_terminal_and_honors_fallback(
+    monkeypatch,
+) -> None:
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    called = []
+    monkeypatch.setattr("hal.cli.run_tui_chat", lambda _stderr, _session=None: called.append("tui") or 0)
+    monkeypatch.setattr("hal.cli.run_chat", lambda _stdout, _stderr, _session=None: called.append("repl") or 0)
+
+    assert main(["chat"], stdin=Terminal(), stdout=Terminal(), stderr=io.StringIO()) == 0
+    assert main(["chat", "--no-tui"], stdin=Terminal(), stdout=Terminal(), stderr=io.StringIO()) == 0
+    monkeypatch.setenv("HAL_NO_TUI", "1")
+    assert main([], stdin=Terminal(), stdout=Terminal(), stderr=io.StringIO()) == 0
+    monkeypatch.delenv("HAL_NO_TUI")
+    monkeypatch.setattr("hal.cli._missing_tui_dependencies", lambda: ["rich"])
+    error = io.StringIO()
+    assert main([], stdin=Terminal(), stdout=Terminal(), stderr=error) == 0
+    assert "missing rich" in error.getvalue()
+    assert "pip install -e ." in error.getvalue()
+    assert called == ["tui", "repl", "repl", "repl"]
+
+
+def test_required_tui_reports_missing_dependencies_without_starting_repl(
+    monkeypatch,
+) -> None:
+    class Terminal(io.StringIO):
+        def isatty(self) -> bool:
+            return True
+
+    monkeypatch.setattr("hal.cli._missing_tui_dependencies", lambda: ["rich", "textual"])
+    monkeypatch.setattr("hal.cli.run_chat", lambda *_args: (_ for _ in ()).throw(AssertionError("unexpected REPL")))
+    error = io.StringIO()
+
+    assert main(["tui"], stdin=Terminal(), stdout=Terminal(), stderr=error) == 1
+    assert "missing rich, textual" in error.getvalue()
 
 
 def test_headless_timeout_covers_the_complete_agent_loop(monkeypatch) -> None:
@@ -107,6 +147,7 @@ def test_ctrl_c_cancels_turn_commits_results_and_saves_valid_session(monkeypatch
 
     assert signal.getsignal(signal.SIGINT) == previous_handler
     assert "interrupted" in error.getvalue()
+    assert any(f"“{saying}”" in output.getvalue() for saying in HAL_SAYINGS)
     results = agent.messages[-1].content
     assert [result.tool_use_id for result in results] == ["call-1", "call-2"]
     assert all(result.is_error for result in results)

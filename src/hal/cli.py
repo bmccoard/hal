@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import sys
 import time
 from pathlib import Path
+from collections.abc import Callable
 from typing import TextIO
 
 from . import __version__
@@ -15,6 +17,7 @@ from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
 from .git import GitError, create_git_backend
 from .providers import ProviderError, create_provider
+from .sayings import startup_saying
 from .sessions import Metadata, Session, SessionStore, short_session_id
 from .tools import BashTool, default_registry, workspace_root
 
@@ -22,8 +25,10 @@ from .tools import BashTool, default_registry, workspace_root
 USAGE = """HAL — a Python coding agent
 
 USAGE:
-  hal                Interactive chat mode (default)
-  hal chat           Interactive chat mode (explicit)
+  hal                Interactive chat mode (TUI; falls back to the basic REPL)
+  hal chat [--no-tui]
+                     Interactive chat with an optional basic-REPL fallback
+  hal tui            Require the full-screen interactive interface
   hal run [options] <prompt>
                      Run one headless prompt and exit
   hal sessions [-v]  List saved chat sessions
@@ -62,10 +67,15 @@ def _load(cwd: Path, err: TextIO) -> Config | None:
 
 
 def _make_agent(config: Config, cwd: Path, session: Session | None = None, interactive: bool = False,
-                out: TextIO = sys.stdout, err: TextIO = sys.stderr) -> tuple[Agent, list, dict]:
+                out: TextIO = sys.stdout, err: TextIO = sys.stderr,
+                event_handler: Callable[[Event], None] | None = None,
+                confirm_handler: Callable[[str], bool] | None = None) -> tuple[Agent, list, dict]:
     skills = load_skills(cwd) if config.skills else []
     phases = resolve_phases(config)
     provider = create_provider(config)
+    # Headless mode preserves its single buffered result/JSON contract. Streaming
+    # is an interactive presentation capability and remains configurable there.
+    provider.streaming_enabled = provider.streaming_enabled and interactive
     system = build_system(config, cwd, skills, phases)
 
     def event(activity: Event) -> None:
@@ -83,9 +93,9 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
 
     agent = Agent(provider, config.model, system, default_registry(
                       cwd, workspace_root(cwd), config.tool_approvals if interactive else None,
-                      confirm if interactive else None, config.git_backend),
+                      (confirm_handler or confirm) if interactive else None, config.git_backend),
                   messages=session.messages if session else None, usage=session.usage if session else None,
-                  on_event=event)
+                  on_event=event_handler or event)
     return agent, skills, phases
 
 
@@ -218,6 +228,116 @@ def run_doctor(stdout: TextIO) -> int:
     return 1 if failed else 0
 
 
+def _tui_supported(stdin: TextIO, stdout: TextIO) -> bool:
+    """Use the full-screen UI only on a real, capable terminal."""
+    if os.environ.get("HAL_NO_TUI", "").strip().lower() in {"1", "true", "yes"}:
+        return False
+    return bool(
+        getattr(stdin, "isatty", lambda: False)()
+        and getattr(stdout, "isatty", lambda: False)()
+        and os.environ.get("TERM", "").lower() != "dumb"
+    )
+
+
+def _missing_tui_dependencies() -> list[str]:
+    """Return direct TUI imports that are absent from the active environment."""
+    missing = []
+    for name in ("rich", "textual"):
+        try:
+            available = importlib.util.find_spec(name) is not None
+        except (ImportError, ValueError):
+            available = False
+        if not available:
+            missing.append(name)
+    return missing
+
+
+def _git_branch(cwd: Path, preference: str) -> str:
+    try:
+        backend = create_git_backend(workspace_root(cwd), preference)
+        if backend.is_repository():
+            return backend.status().branch or "-"
+    except (GitError, OSError, ValueError):
+        pass
+    return "-"
+
+
+def run_tui_chat(stderr: TextIO, session_id: str | None = None) -> int:
+    """Initialize chat state and hand it to the event-driven terminal UI."""
+    from .tui import run_tui
+
+    store = SessionStore(); cwd = Path.cwd()
+    try:
+        if session_id:
+            session = store.load(session_id)
+            saved = Path(session.metadata.cwd)
+            if saved.is_dir():
+                os.chdir(saved); cwd = saved
+            else:
+                print(f"warning: saved working directory is unavailable: {saved}", file=stderr)
+        else:
+            session = None
+        cfg = load_config(cwd)
+        if session and session.metadata.provider and session.metadata.model:
+            cfg.provider = session.metadata.provider.replace("openai-codex", "openai")
+            cfg.model = session.metadata.model
+        agent, skills, phases = _make_agent(
+            cfg, cwd, session, interactive=True,
+            event_handler=lambda _event: None, confirm_handler=lambda _prompt: False,
+        )
+        if session is None:
+            session = store.create(Metadata(
+                cwd=str(cwd), model=cfg.model, provider=cfg.provider,
+                openai_auth=cfg.openai_auth if cfg.provider == "openai" else "",
+            ))
+
+        def make_session(target_cwd: Path, target: Session):
+            target_cfg = load_config(target_cwd)
+            if target.metadata.provider and target.metadata.model:
+                target_cfg.provider = target.metadata.provider.replace("openai-codex", "openai")
+                target_cfg.model = target.metadata.model
+            target_agent, target_skills, target_phases = _make_agent(
+                target_cfg, target_cwd, target, interactive=True,
+                event_handler=lambda _event: None, confirm_handler=lambda _prompt: False,
+            )
+            return (
+                target_cfg, target_agent, target_skills, target_phases,
+                _git_branch(target_cwd, target_cfg.git_backend),
+            )
+
+        return run_tui(
+            agent, cfg, cwd, session, store, skills, phases,
+            branch=_git_branch(cwd, cfg.git_backend), session_factory=make_session,
+        )
+    except (GitError, ProviderError, OSError, ValueError, json.JSONDecodeError) as exc:
+        print(f"tui: {exc}", file=stderr)
+        return 1
+
+
+def _run_interactive(
+    stdin: TextIO, stdout: TextIO, stderr: TextIO,
+    session_id: str | None = None, *, require_tui: bool = False,
+) -> int:
+    if not _tui_supported(stdin, stdout):
+        if require_tui:
+            print(
+                "hal tui: a capable interactive terminal is required; use "
+                "'hal chat --no-tui' for the basic interface",
+                file=stderr,
+            )
+            return 1
+        return run_chat(stdout, stderr, session_id)
+    if missing := _missing_tui_dependencies():
+        names = ", ".join(missing)
+        guidance = "run 'python -m pip install -e .' to install the TUI dependencies"
+        if require_tui:
+            print(f"hal tui: missing {names}; {guidance}", file=stderr)
+            return 1
+        print(f"warning: TUI unavailable (missing {names}); using basic REPL; {guidance}", file=stderr)
+        return run_chat(stdout, stderr, session_id)
+    return run_tui_chat(stderr, session_id)
+
+
 def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> int:
     store = SessionStore(); cwd = Path.cwd()
     try:
@@ -234,6 +354,7 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
         if session is None:
             session = store.create(Metadata(cwd=str(cwd), model=cfg.model, provider=cfg.provider, openai_auth=cfg.openai_auth if cfg.provider == "openai" else ""))
         print(f"HAL · {cfg.provider}/{cfg.model} · {cwd}", file=stdout)
+        print(f"“{startup_saying()}”", file=stdout)
         print("Type /help for commands; Ctrl-D or /exit to quit.", file=stdout)
         while True:
             try: text = input("HAL> ").strip()
@@ -325,15 +446,23 @@ def _save_live_session(store: SessionStore, session: Session, agent: Agent,
 
 def main(argv: list[str] | None = None, stdin: TextIO = sys.stdin, stdout: TextIO = sys.stdout, stderr: TextIO = sys.stderr) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
-    if not args: return run_chat(stdout, stderr)
+    if not args:
+        return _run_interactive(stdin, stdout, stderr)
     command, rest = args[0], args[1:]
-    if command == "chat": return run_chat(stdout, stderr)
+    if command == "chat":
+        if rest == ["--no-tui"]: return run_chat(stdout, stderr)
+        if rest: print("usage: hal chat [--no-tui]", file=stderr); return 2
+        return _run_interactive(stdin, stdout, stderr)
+    if command == "tui":
+        if rest: print("usage: hal tui", file=stderr); return 2
+        return _run_interactive(stdin, stdout, stderr, require_tui=True)
     if command == "run": return run_headless(rest, stdin, stdout, stderr)
     if command == "sessions": return run_sessions(rest, stdout, stderr)
     if command == "doctor": return run_doctor(stdout)
     if command == "resume":
         if not rest: print("usage: hal resume <short-id-or-full-id>", file=stderr); return 2
-        return run_chat(stdout, stderr, rest[0])
+        if len(rest) > 1: print("usage: hal resume <short-id-or-full-id>", file=stderr); return 2
+        return _run_interactive(stdin, stdout, stderr, rest[0])
     if command in {"version", "-v", "--version"}: print(f"hal version {__version__}", file=stdout); return 0
     if command in {"help", "-h", "--help"}: print(USAGE, file=stdout); return 0
     if command == "login": print("login: ChatGPT subscription auth is not supported by the Python port; configure openai_auth: api_key", file=stderr); return 1

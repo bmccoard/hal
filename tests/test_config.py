@@ -44,6 +44,11 @@ def test_git_backend_rejects_unknown_values() -> None:
         parse_config({"git": "dulwich"})
 
 
+def test_streaming_defaults_on_and_can_be_disabled() -> None:
+    assert parse_config({}).streaming is True
+    assert parse_config({"features": {"streaming": False}}).streaming is False
+
+
 def test_dotenv_loads_values_without_overriding_environment(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / ".env"
     path.write_text("NEW_VALUE='from file'\nEXISTING=from-file\n", encoding="utf-8")

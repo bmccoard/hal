@@ -46,6 +46,7 @@ class Config:
     agents_file: bool = True
     skills: bool = True
     prompt_caching: bool = True
+    streaming: bool = True
     verbose: bool = False
     phases: dict[str, dict[str, str]] = field(default_factory=dict)
     providers: dict[str, ProviderProfile] = field(default_factory=dict)
@@ -189,6 +190,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         agents_file=_bool(features, "agents_file", True),
         skills=_bool(features, "skills", True),
         prompt_caching=_bool(features, "prompt_caching", True),
+        streaming=_bool(features, "streaming", True),
         verbose=_bool(output, "verbose", False),
         phases=dict(data.get("phases") or {}),
         providers=profiles,

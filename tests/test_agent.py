@@ -12,7 +12,7 @@ from hal.agent import (
     UnexpectedStopReasonError,
 )
 from hal.cancellation import CancelledError, CancellationToken
-from hal.models import ContentBlock, Response, ToolSpec
+from hal.models import ContentBlock, Response, StreamDelta, ToolSpec
 from hal.tools import Registry, Tool, default_registry
 
 
@@ -41,6 +41,18 @@ class ScriptedProvider:
         if not self.responses:
             raise AssertionError("unexpected provider call")
         return self.responses.pop(0)
+
+
+class StreamingProvider:
+    name = "streaming"
+
+    def complete(self, request, cancellation=None):
+        raise AssertionError("buffered completion should not be used")
+
+    def stream(self, request, on_delta, cancellation=None):
+        on_delta(StreamDelta("text", "Hel"))
+        on_delta(StreamDelta("text", "lo"))
+        return Response([ContentBlock("text", text="Hello")])
 
 
 class InterruptTool(Tool):
@@ -78,6 +90,17 @@ def test_agent_executes_tool_and_keeps_matching_result(tmp_path: Path) -> None:
     assert target.read_text(encoding="utf-8") == "hello"
     assert agent.messages[1].content[0].id == "call-1"
     assert agent.messages[2].content[0].tool_use_id == "call-1"
+
+
+def test_agent_forwards_stream_deltas_without_reemitting_final_text() -> None:
+    events = []
+    agent = Agent(StreamingProvider(), "model", "system", Registry([]), on_event=events.append)
+
+    assert agent.send("hello") == "Hello"
+
+    text = [event.text for event in events if event.kind == EventKind.ASSISTANT_TEXT]
+    assert text == ["Hel", "lo"]
+    assert events[-1].kind == EventKind.DONE
 
 
 def test_tool_turn_is_committed_only_after_all_results_exist(tmp_path: Path) -> None:

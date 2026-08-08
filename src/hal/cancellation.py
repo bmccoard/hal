@@ -4,7 +4,7 @@ from contextlib import contextmanager
 import signal
 import threading
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 
 class CancelledError(RuntimeError):
@@ -18,6 +18,8 @@ class CancellationToken:
         self.deadline = deadline
         self._cancelled = threading.Event()
         self._reason = "operation cancelled"
+        self._callback_lock = threading.Lock()
+        self._callbacks: set[Callable[[], None]] = set()
 
     @classmethod
     def with_timeout(cls, seconds: float) -> "CancellationToken":
@@ -28,6 +30,30 @@ class CancellationToken:
     def cancel(self, reason: str = "operation cancelled") -> None:
         self._reason = reason
         self._cancelled.set()
+        with self._callback_lock:
+            callbacks = list(self._callbacks)
+        for callback in callbacks:
+            try:
+                callback()
+            except Exception:
+                pass
+
+    def add_cancel_callback(self, callback: Callable[[], None]) -> Callable[[], None]:
+        """Run callback on cancellation and return a function that unregisters it."""
+        with self._callback_lock:
+            if self._cancelled.is_set():
+                run_now = True
+            else:
+                self._callbacks.add(callback)
+                run_now = False
+        if run_now:
+            callback()
+
+        def remove() -> None:
+            with self._callback_lock:
+                self._callbacks.discard(callback)
+
+        return remove
 
     def remaining(self) -> float | None:
         if self.deadline is None:

@@ -8,7 +8,8 @@ plans that are safe to keep in the repository.
 | Initiative | Design | Roadmap | Status | Next milestone |
 | --- | --- | --- | --- | --- |
 | Agent behavior and platform awareness | [Behavior design](designs/agent-behavior.md) | [Python parity](roadmaps/python-parity.md) | In progress | Decide the deterministic dependency-install guard and add secret redaction |
-| Go/Python capability parity | The Go implementation is the current reference | [Python parity](roadmaps/python-parity.md) | In progress | Stream and bound tool output before buffering |
+| Go/Python capability parity | The Go implementation is the current reference | [Python parity](roadmaps/python-parity.md) | In progress | Bring grep/glob behavior to parity and continue TUI polish |
+| Interactive terminal experience | [Terminal interface](designs/terminal-interface.md) | [Python parity](roadmaps/python-parity.md) | First slice implemented | Complete Linux smoke test and improve transcript/composer polish |
 | Organization-system integration | [Integration design](designs/organization-integration.md) | [Integration roadmap](roadmaps/organization-integration.md) | Direction accepted; not started | Select the separate project name and contract |
 | Portable Git operations | [Git integration](designs/git-integration.md) | [Python parity](roadmaps/python-parity.md) | Implemented | Expand backend parity coverage as new Git operations are added |
 

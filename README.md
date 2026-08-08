@@ -5,8 +5,8 @@ https://github.com/owainlewis/neo. Its name is inspired by HAL 9000 from
 *2001: A Space Odyssey*. HAL keeps the upstream provider-neutral agent loop,
 local-first configuration, built-in coding tools, project instructions, skills,
 named phases, headless mode, and resumable sessions.
-The interactive interface is a portable REPL rather than the Go version's
-Bubble Tea TUI.
+The interactive interface is a responsive Textual TUI inspired by the Go version's
+Bubble Tea experience, with a portable basic REPL retained as a fallback.
 
 ## Install
 
@@ -42,6 +42,7 @@ compaction:
 features:
   agents_file: true
   skills: true
+  streaming: true
   prompt_caching: true
 
 output:
@@ -61,13 +62,34 @@ but changing them does not currently alter runtime behavior.
 | --- | --- | --- |
 | `features.agents_file` | Active | Loads applicable `AGENTS.md` files into the system prompt. |
 | `features.skills` | Active | Discovers skills and expands `$name` and `/name` invocations. |
+| `features.streaming` | Active | Streams interactive responses incrementally when supported; disable it to require buffered responses. |
 | `git.backend` | Active | Selects `auto`, `native`, or `dulwich`; `auto` prefers the Git executable and otherwise uses Dulwich. |
 | `compaction.context_window_tokens` | Reserved | Parsed and validated; transcript compaction is not implemented yet. |
 | `features.prompt_caching` | Reserved | Parsed; provider prompt-cache controls are not emitted yet. |
-| `output.verbose` | Reserved | Parsed; the Python REPL currently uses one fixed tool-activity view. |
+| `output.verbose` | Active in TUI | Concise receipts by default; shows full tool calls and results when enabled. The basic REPL retains its compact fixed view. |
 
 The reserved settings should be tracked as implementation work in the issue
 tracker before being described as supported features.
+
+### Feature flags
+
+The `features` mapping controls optional runtime behavior. Omitted flags use the
+defaults shown here:
+
+```yaml
+features:
+  agents_file: true     # Load applicable AGENTS.md project instructions.
+  skills: true          # Discover and expand HAL skills and named invocations.
+  streaming: true       # Update interactive responses as provider deltas arrive.
+  prompt_caching: true  # Reserved; currently has no runtime effect.
+```
+
+Set `streaming: false` when an enterprise gateway needs traditional buffered
+Chat Completions. This affects interactive TUI and basic-REPL conversations;
+`hal run` is always buffered. `agents_file` and `skills` take effect when HAL
+builds a new agent, so restart or resume into a newly constructed session after
+changing them. Unknown configuration keys are retained only where explicitly
+documented; do not assume an unlisted feature flag is active.
 
 Keep model selection in `hal.yaml` and put credentials in the ignored `.env` file.
 This reduces the chance that routine configuration inspection displays a token:
@@ -106,6 +128,14 @@ providers:
     max_tokens_parameter: max_completion_tokens
 ```
 
+Interactive streaming supports OpenAI Responses, OpenAI-compatible Chat Completions
+(including OpenRouter and GPT-5.1 enterprise profiles), Anthropic Messages, and Google
+Gemini. A Chat Completions gateway that rejects `stream: true` before sending data is
+retried once using the existing buffered request. If it simply returns a normal JSON
+response, HAL consumes that same response without issuing a duplicate request. To
+force the compatibility path for a workplace gateway, set `features.streaming: false`.
+Headless `hal run` remains buffered so its output and JSON contract do not change.
+
 The older inline `api_base` and `apiBase` profile fields remain supported for
 compatibility, but `api_base_env` is recommended when an endpoint is private or
 workplace-specific. Environment values override an inline endpoint when both are
@@ -135,7 +165,9 @@ These are operating-system shell commands, not model tools or skills:
 
 | Command | What it does |
 | --- | --- |
-| `hal` | Starts an interactive conversation and saves it as a session. |
+| `hal` | Starts the full-screen TUI when supported, otherwise the basic REPL, and saves the conversation as a session. |
+| `hal chat --no-tui` | Starts the portable line-oriented fallback explicitly. |
+| `hal tui` | Requires the full-screen interface and reports an error on unsupported terminals. |
 | `hal run "..."` | Runs one prompt and exits without creating a session. |
 | `hal run --json "..."` | Runs one headless prompt and returns JSON containing status, timing, tool counts, and the final answer. |
 | `hal sessions` | Lists saved sessions in a compact view with short selectors. |
@@ -147,6 +179,27 @@ These are operating-system shell commands, not model tools or skills:
 `hal run "run tests"` asks the model to run tests; it does not execute a fixed
 test command itself. The model normally fulfills that request with its shell
 tool.
+
+The TUI uses plain `Enter` to send. Use `Alt+Enter`, `Shift+Enter`, or the visible
+**New line** button to add a line; `Ctrl+Enter` and `F2` are additional send
+shortcuts. `Ctrl-C` or `Escape` cancels active work, `Ctrl+L` clears the
+conversation, and `Ctrl+Q` quits safely. Some terminals—especially when VS Code
+has claimed a shortcut—never send modified Enter combinations to terminal apps;
+plain Enter, `F2`, and the buttons remain available in that case.
+
+Every interactive startup displays one randomly selected HAL quotation. The small,
+central catalog lives in `src/hal/sayings.py`, so startup lines can be reviewed or
+extended without changing either interactive interface. Headless `hal run` does not
+print a quotation and retains its machine-readable output contract.
+Quitting during a turn first cancels the work and saves a structurally valid session.
+Set `HAL_NO_TUI=1` or use `hal chat --no-tui` when a terminal does not render the
+full-screen interface correctly. See [the terminal-interface design](docs/designs/terminal-interface.md)
+for the worker, event, cancellation, and fallback architecture.
+
+After pulling an update that adds or changes dependencies, refresh an existing
+editable virtual-environment installation with `python -m pip install -e .`. If
+`rich` or `textual` is missing, automatic interactive mode warns and falls back to
+the basic REPL; explicit `hal tui` reports the missing packages and exits.
 
 `hal run --timeout <duration>` applies one wall-clock deadline to the provider
 calls, retry waits, agent loop, and tool calls. When a shell command is active,

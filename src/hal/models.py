@@ -5,6 +5,15 @@ from typing import Any, Literal
 
 
 Role = Literal["user", "assistant", "tool"]
+DeltaKind = Literal["text", "commentary"]
+
+
+@dataclass(slots=True)
+class StreamDelta:
+    """A provider-neutral incremental display update."""
+
+    kind: DeltaKind
+    text: str
 
 
 @dataclass(slots=True)
@@ -88,4 +97,3 @@ class Response:
     content: list[ContentBlock]
     stop_reason: str = "end_turn"
     usage: Usage = field(default_factory=Usage)
-

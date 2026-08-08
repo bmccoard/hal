@@ -9,7 +9,12 @@ description = "HAL, a local provider-neutral coding-agent CLI based on Neo"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
-dependencies = ["PyYAML>=6.0", "dulwich>=0.24,<0.26"]
+dependencies = [
+  "PyYAML>=6.0",
+  "dulwich>=0.24,<0.26",
+  "rich>=14.2,<16",
+  "textual>=7.5,<8",
+]
 
 [project.scripts]
 hal = "hal.cli:main"

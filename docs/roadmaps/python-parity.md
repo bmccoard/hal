@@ -5,8 +5,8 @@
 | Status | In progress |
 | Target | `HAL` |
 | Last reviewed | 2026-08-07 |
-| Current milestone | Phase 1 - core correctness and safety |
-| Next work | Bring grep/glob schemas and behavior to parity |
+| Current milestone | Phase 1 core safety, with the first Phase 4 TUI slice underway |
+| Next work | Bring grep/glob schemas and behavior to parity; continue TUI polish |
 
 Audit basis: compared HAL with the upstream Go Neo tree and its developer docs on
 2026-08-06. The Python port has the basic provider-neutral loop, four API-key
@@ -103,6 +103,10 @@ tests, or documentation recorded in the implementation log.
 - [ ] Harden shared HTTP retries with cancellation-aware waits, provider-specific
   transient classifications, bounded jitter/backoff, numeric and HTTP-date
   `Retry-After`, and secret-safe errors.
+- [x] Stream interactive text, commentary/reasoning, fragmented tool calls, stop
+  reasons, and usage through a provider-neutral delta contract for OpenAI Responses,
+  OpenAI-compatible Chat Completions/OpenRouter, Anthropic, and Gemini. Preserve a
+  configurable buffered path and avoid retrying after partial streamed output.
 - [ ] Complete provider-native transcript replay: validate and preserve OpenAI
   encrypted reasoning items and replay only valid Gemini thought metadata/function
   calls while retaining portable text/tool history across provider switches.
@@ -144,9 +148,15 @@ tests, or documentation recorded in the implementation log.
 
 - [ ] Choose and document a cross-platform Python TUI architecture (after a small
   Windows/Linux spike) with an event-driven UI separated from the core agent loop.
+  - [x] Implement and document the Textual architecture plus its basic-REPL fallback.
+  - [ ] Complete the Linux terminal smoke test before closing the architecture spike.
 - [ ] Replace the blocking REPL with a responsive transcript/composer UI: styled
   Markdown, scrolling, multiline editing, history, paste handling, Unicode-aware
   layout, selectable text, status line, elapsed time, cwd, branch, provider, and model.
+  - [x] Update one live Markdown response card from provider deltas without blocking
+    input, status updates, or cancellation.
+  - [x] Provide portable composer controls: Enter and F2 send; Alt/Shift+Enter and a
+    visible button add a line; retain Ctrl+Enter where the terminal delivers it.
 - [ ] Render live tool activity, concise completed receipts, errors, parallel groups,
   workflow progress, and a visible subagent tree.
 - [ ] Implement `output.verbose`: concise mode by default; hide routine lines such as
@@ -221,6 +231,10 @@ tests, or documentation recorded in the implementation log.
 | 2026-08-07 | Add safe structured repository initialization on `main`, stage/unstage operations, automatic no-binary Dulwich selection, existing-repository refusal, sensitive staging/diff controls, and explicit guidance against Git installation, ad hoc Dulwich scripts, or credential rewriting | `src/hal/git.py`, `src/hal/git_tools.py`, `src/hal/context.py`, `tests/test_git.py`, `tests/test_tools.py`, `tests/test_context.py`, `README.md`, `docs/designs/git-integration.md` | Full suite: 80 passed; native and simulated no-Git Dulwich initialization, stage/unstage, initial commit, and sensitive-diff filtering passed on Windows |
 | 2026-08-07 | Add environment-backed custom provider endpoints through `api_base_env`, retain inline endpoint compatibility, and move private endpoint examples into `.env` | `src/hal/config.py`, `src/hal/providers.py`, `tests/test_config.py`, `tests/test_providers.py`, `README.md`, `hal.yaml.example` | Full suite: 82 passed; environment endpoint resolution, precedence, provider construction, and missing-variable diagnostics passed on Windows |
 | 2026-08-07 | Stream shell and native Git stdout/stderr through fixed-size head/tail buffers, bound Dulwich diff/push output, retain timeout partial output, preserve truncation byte metadata, and fail closed when Git safety parsing is incomplete | `src/hal/process.py`, `src/hal/tools.py`, `src/hal/git.py`, `src/hal/agent.py`, `tests/test_process.py`, `tests/test_git.py`, `README.md` | Full suite: 88 passed; large stdout/stderr, shell, Dulwich diff, timeout, cancellation, and truncated native Git safety tests passed on Windows |
+| 2026-08-07 | Add the first Textual terminal-interface slice with a Markdown transcript, multiline composer, live status and tool receipts, background agent work, approvals, cancellation, safe session persistence, resume, verbose output, dependency-aware startup, and basic-REPL fallback | `src/hal/tui.py`, `src/hal/cli.py`, `tests/test_tui.py`, `pyproject.toml`, `README.md`, `docs/designs/terminal-interface.md` | Full suite: 93 passed, including Textual headless UI send/save, clear, cancellation, CLI-selection, and missing-dependency fallback tests; Windows terminal smoke pending |
+| 2026-08-07 | Add provider-neutral interactive streaming across OpenAI Responses, Chat Completions/OpenRouter and enterprise GPT profiles, Anthropic, and Gemini; accumulate tool calls and usage, update one live TUI card, close streams on cancellation, and preserve no-duplicate buffered fallbacks | `src/hal/models.py`, `src/hal/providers.py`, `src/hal/agent.py`, `src/hal/cancellation.py`, `src/hal/cli.py`, `src/hal/tui.py`, `tests/test_providers.py`, `tests/test_agent.py`, `tests/test_config.py`, `tests/test_tui.py`, `README.md`, `hal.yaml.example`, `docs/designs/terminal-interface.md` | Full suite: 106 passed; official protocol documentation cross-check and compile/package checks passed; opt-in live-provider smoke tests pending |
+| 2026-08-07 | Document every active/reserved feature flag and replace Ctrl+Enter-only composition with terminal-portable Enter/F2 send, Alt/Shift+Enter newline, and a visible newline button | `src/hal/tui.py`, `tests/test_tui.py`, `README.md`, `hal.yaml.example`, `docs/designs/terminal-interface.md` | Full suite: 107 passed, including Textual key-routing coverage; compile and package checks passed |
+| 2026-08-07 | Display one randomized HAL quotation at TUI and basic-REPL startup from a shared catalog while preserving headless output | `src/hal/sayings.py`, `src/hal/tui.py`, `src/hal/cli.py`, `tests/test_sayings.py`, `README.md`, `docs/designs/terminal-interface.md` | Full suite: 108 passed; compile and package checks passed |
 
 ## Final parity gate
 
