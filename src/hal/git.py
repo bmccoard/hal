@@ -6,10 +6,18 @@ from pathlib import Path
 import shutil
 from typing import Protocol
 
-from dulwich import porcelain
-from dulwich.errors import NotGitRepository
-from dulwich.index import IndexEntry
-from dulwich.repo import Repo
+try:
+    from dulwich import porcelain
+    from dulwich.errors import NotGitRepository
+    from dulwich.index import IndexEntry
+    from dulwich.repo import Repo
+    _DULWICH_IMPORT_ERROR: Exception | None = None
+except ImportError as exc:
+    porcelain = None
+    NotGitRepository = RuntimeError
+    IndexEntry = None
+    Repo = None
+    _DULWICH_IMPORT_ERROR = exc
 
 from .cancellation import CancelledError, CancellationToken, cancellation_or_default
 from .process import BoundedOutput, DEFAULT_OUTPUT_LIMIT, ProcessResult, run_bounded_process
@@ -17,6 +25,16 @@ from .process import BoundedOutput, DEFAULT_OUTPUT_LIMIT, ProcessResult, run_bou
 
 class GitError(RuntimeError):
     pass
+
+
+def _require_dulwich() -> None:
+    if porcelain is None or Repo is None or IndexEntry is None:
+        detail = f": {_DULWICH_IMPORT_ERROR}" if _DULWICH_IMPORT_ERROR else ""
+        raise GitError(
+            "dulwich Git backend is unavailable because optional dependency 'dulwich' "
+            "is not installed. Install it with: python -m pip install -e '.[git]'"
+            + detail
+        )
 
 
 @dataclass(slots=True)
@@ -228,6 +246,7 @@ class DulwichGitBackend:
     name = "dulwich"
 
     def __init__(self, root: Path) -> None:
+        _require_dulwich()
         self.root = root.resolve()
 
     def _repo(self) -> Repo:

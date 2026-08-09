@@ -18,6 +18,16 @@ python -m pip install -e .
 hal help
 ```
 
+Optional install profiles:
+
+```bash
+# Full interactive + Git fallback support
+python -m pip install -e ".[tui,git]"
+
+# Development/test environment
+python -m pip install -e ".[dev]"
+```
+
 The same CLI works without installing a script after setting `PYTHONPATH=src`:
 
 ```bash
@@ -63,7 +73,7 @@ but changing them does not currently alter runtime behavior.
 | `features.agents_file` | Active | Loads applicable `AGENTS.md` files into the system prompt. |
 | `features.skills` | Active | Discovers skills and expands `$name` and `/name` invocations. |
 | `features.streaming` | Active | Streams interactive responses incrementally when supported; disable it to require buffered responses. |
-| `git.backend` | Active | Selects `auto`, `native`, or `dulwich`; `auto` prefers the Git executable and otherwise uses Dulwich. |
+| `git.backend` | Active | Selects `auto`, `native`, or `dulwich`; `auto` prefers the Git executable and otherwise uses Dulwich when the optional `git` extra is installed. |
 | `compaction.context_window_tokens` | Reserved | Parsed and validated; transcript compaction is not implemented yet. |
 | `features.prompt_caching` | Reserved | Parsed; provider prompt-cache controls are not emitted yet. |
 | `output.verbose` | Active in TUI | Concise receipts by default; shows full tool calls and results when enabled. The basic REPL retains its compact fixed view. |
@@ -200,6 +210,7 @@ for the worker, event, cancellation, and fallback architecture.
 
 After pulling an update that adds or changes dependencies, refresh an existing
 editable virtual-environment installation with `python -m pip install -e .`. If
+TUI dependencies were split, use `python -m pip install -e ".[tui]"`. If
 `rich` or `textual` is missing, automatic interactive mode warns and falls back to
 the basic REPL; explicit `hal tui` reports the missing packages and exits.
 
@@ -225,11 +236,55 @@ exceeds the limit rather than making commit-safety decisions from truncated data
   `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `git_init`,
   `git_stage`, `git_unstage`, `git_status`, `git_diff`, `git_log`, `git_commit`,
   and `git_push`.
+- **Tool extensions** are separately installed Python packages that add tools
+  through the `hal.tools` entry-point group. HAL loads only extensions explicitly
+  enabled by name in `hal.yaml`.
 - **Skills** are reusable instruction documents stored at
   `.hal/skills/<name>/SKILL.md`. They guide the model but do not execute code by
   themselves.
 - **Named phases** are built-in one-turn instruction modes: `/design`, `/plan`,
   `/build`, and `/review`.
+
+### Tool extensions
+
+Extensions keep service-specific code out of HAL while making their tools available
+in the normal CLI, TUI, headless runs, and resumed sessions. Installing an extension
+does not activate it. Enable its registered entry-point name explicitly:
+
+```yaml
+extensions:
+  - jellyfin
+
+extension_config:
+  jellyfin:
+    url: http://localhost:8096
+```
+
+Keep API keys in `.env` or the process environment rather than `hal.yaml`. HAL passes
+the mapping under `extension_config.<name>` to that extension but does not interpret
+it.
+
+An extension package registers a factory in its `pyproject.toml`:
+
+```toml
+[project.entry-points."hal.tools"]
+jellyfin = "hal_jellyfin:create_tools"
+```
+
+The factory accepts an [`ExtensionContext`](src/hal/extensions.py) and returns an
+iterable of [`Tool`](src/hal/tools.py) instances:
+
+```python
+from hal.extensions import ExtensionContext
+
+def create_tools(context: ExtensionContext):
+    return [JellyfinSearchTool(context.settings)]
+```
+
+Entry-point names must be unique among installed distributions. Tool names must also
+be unique across HAL and all enabled extensions; HAL stops with a configuration error
+instead of silently replacing a tool. Extensions can add tools through the public
+`Registry.extend()` method when constructing registries in application code.
 
 The tool retains the provider-facing name `bash` for compatibility, but selects
 the native shell explicitly. On Windows it uses `pwsh`, then Windows PowerShell,
@@ -266,9 +321,9 @@ structurally valid. Ctrl-C while HAL is waiting at the prompt exits normally.
 
 HAL uses dedicated Git tools instead of requiring the model to construct shell
 commands. With the default `git.backend: auto`, HAL uses the installed `git`
-executable when available and falls back to the required
+executable when available and falls back to the optional
 [Dulwich Python implementation](https://www.dulwich.io/getting-started/) when it is
-not. Force one implementation when troubleshooting or
+not and the `git` extra is installed. Force one implementation when troubleshooting or
 testing parity:
 
 ```yaml

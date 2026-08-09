@@ -42,6 +42,8 @@ class Config:
     git_backend: str = "auto"
     subagents: dict[str, str] = field(default_factory=dict)
     tool_approvals: list[str] = field(default_factory=list)
+    extensions: list[str] = field(default_factory=list)
+    extension_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     context_window_tokens: int = 200_000
     agents_file: bool = True
     skills: bool = True
@@ -96,6 +98,19 @@ class Config:
             if item not in cleaned:
                 cleaned.append(item)
         self.tool_approvals = cleaned
+        enabled: list[str] = []
+        for item in self.extensions:
+            name = str(item).strip()
+            if not name:
+                raise ValueError("extensions entries must not be empty")
+            if name not in enabled:
+                enabled.append(name)
+        self.extensions = enabled
+        for name, settings in self.extension_config.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError("extension_config keys must be non-empty strings")
+            if not isinstance(settings, dict):
+                raise ValueError(f"extension_config.{name} must be a mapping")
 
     def active_profile(self) -> ProviderProfile | None:
         return self.providers.get(self.provider)
@@ -149,6 +164,16 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
     git = data.get("git") or {}
     if not isinstance(git, dict):
         raise ValueError("git must be a mapping")
+    extensions = data.get("extensions", [])
+    if extensions is None:
+        extensions = []
+    if not isinstance(extensions, list):
+        raise ValueError("extensions must be a list")
+    extension_config = data.get("extension_config", {})
+    if extension_config is None:
+        extension_config = {}
+    if not isinstance(extension_config, dict):
+        raise ValueError("extension_config must be a mapping")
     profiles: dict[str, ProviderProfile] = {}
     raw_profiles = data.get("providers") or []
     if isinstance(raw_profiles, dict):
@@ -186,6 +211,8 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         git_backend=str(git.get("backend") or "auto").strip().lower(),
         subagents=dict(data.get("subagents") or {}),
         tool_approvals=list(data.get("tool_approvals") or []),
+        extensions=list(extensions),
+        extension_config=dict(extension_config),
         context_window_tokens=int(compaction.get("context_window_tokens", 200_000)),
         agents_file=_bool(features, "agents_file", True),
         skills=_bool(features, "skills", True),

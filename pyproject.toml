@@ -11,16 +11,25 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
   "PyYAML>=6.0",
-  "dulwich>=0.24,<0.26",
-  "rich>=14.2,<16",
-  "textual>=7.5,<8",
 ]
 
 [project.scripts]
 hal = "hal.cli:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.0"]
+tui = [
+  "rich>=14.2,<16",
+  "textual>=7.5,<8",
+]
+git = [
+  "dulwich>=0.24,<0.26",
+]
+dev = [
+  "pytest>=8.0",
+  "dulwich>=0.24,<0.26",
+  "rich>=14.2,<16",
+  "textual>=7.5,<8",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/hal"]

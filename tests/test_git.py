@@ -208,6 +208,8 @@ def test_commit_tool_is_local_only_and_push_is_explicit(tmp_path: Path) -> None:
     remote = tmp_path / "remote.git"
     porcelain.init(remote, bare=True)
     backend = DulwichGitBackend(root)
+    branch = backend.status().branch
+    branch_ref = f"refs/heads/{branch}".encode("utf-8")
     (root / "a.txt").write_text("content", encoding="utf-8")
 
     committed = json.loads(GitCommitTool(backend).run({
@@ -215,12 +217,12 @@ def test_commit_tool_is_local_only_and_push_is_explicit(tmp_path: Path) -> None:
     }))
     assert committed["pushed"] is False
     with Repo(remote) as remote_repo:
-        assert b"refs/heads/master" not in remote_repo.refs
+        assert branch_ref not in remote_repo.refs
 
     pushed = json.loads(GitPushTool(backend).run({"remote": str(remote)}))
-    assert "pushed master" in pushed["result"]
+    assert f"pushed {branch}" in pushed["result"]
     with Repo(remote) as remote_repo:
-        assert remote_repo.refs[b"refs/heads/master"].decode("ascii") == committed["commit"]
+        assert remote_repo.refs[branch_ref].decode("ascii") == committed["commit"]
 
 
 def test_git_paths_are_repository_relative_and_cannot_escape(tmp_path: Path) -> None:

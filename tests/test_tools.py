@@ -13,9 +13,24 @@ from hal.tools import (
     GrepTool,
     ReadFileTool,
     WriteFileTool,
+    Registry,
+    Tool,
     default_registry,
     shell_argv,
 )
+from hal.models import ToolSpec
+
+
+class NamedTool(Tool):
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(self.name, "test tool", {"type": "object"})
+
+    def run(self, arguments, cancellation=None) -> str:
+        return "ok"
 
 
 def test_edit_requires_exactly_one_match(tmp_path: Path) -> None:
@@ -143,3 +158,11 @@ def test_default_registry_exposes_structured_git_tools(tmp_path: Path) -> None:
         "git_init", "git_stage", "git_unstage", "git_status", "git_diff",
         "git_log", "git_commit", "git_push",
     } <= names
+
+
+def test_registry_can_be_extended_but_rejects_name_collisions() -> None:
+    registry = Registry([NamedTool("one")])
+    registry.extend([NamedTool("two")])
+    assert {spec.name for spec in registry.specs} == {"one", "two"}
+    with pytest.raises(ValueError, match="duplicate tool name: one"):
+        registry.extend([NamedTool("one")])

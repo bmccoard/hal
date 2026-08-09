@@ -50,7 +50,7 @@ def test_interactive_cli_selects_tui_for_terminal_and_honors_fallback(
     error = io.StringIO()
     assert main([], stdin=Terminal(), stdout=Terminal(), stderr=error) == 0
     assert "missing rich" in error.getvalue()
-    assert "pip install -e ." in error.getvalue()
+    assert "pip install -e \".[tui]\"" in error.getvalue()
     assert called == ["tui", "repl", "repl", "repl"]
 
 

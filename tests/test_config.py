@@ -49,6 +49,26 @@ def test_streaming_defaults_on_and_can_be_disabled() -> None:
     assert parse_config({"features": {"streaming": False}}).streaming is False
 
 
+def test_extensions_are_opt_in_deduplicated_and_have_settings() -> None:
+    config = parse_config({
+        "extensions": ["jellyfin", "jellyfin"],
+        "extension_config": {"jellyfin": {"url": "http://media.test"}},
+    })
+    assert config.extensions == ["jellyfin"]
+    assert config.extension_config == {
+        "jellyfin": {"url": "http://media.test"},
+    }
+
+
+def test_extensions_require_structured_configuration() -> None:
+    with pytest.raises(ValueError, match="extensions must be a list"):
+        parse_config({"extensions": "jellyfin"})
+    with pytest.raises(ValueError, match="extension_config must be a mapping"):
+        parse_config({"extension_config": []})
+    with pytest.raises(ValueError, match=r"extension_config\.jellyfin must be a mapping"):
+        parse_config({"extension_config": {"jellyfin": "bad"}})
+
+
 def test_dotenv_loads_values_without_overriding_environment(tmp_path: Path, monkeypatch) -> None:
     path = tmp_path / ".env"
     path.write_text("NEW_VALUE='from file'\nEXISTING=from-file\n", encoding="utf-8")

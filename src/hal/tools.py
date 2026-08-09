@@ -349,9 +349,20 @@ class GrepTool(_RootedTool):
 class Registry:
     def __init__(self, tools: list[Tool], approvals: list[str] | None = None,
                  confirm: Callable[[str], bool] | None = None) -> None:
-        self._tools = {tool.spec.name: tool for tool in tools}
+        self._tools: dict[str, Tool] = {}
+        self.extend(tools)
         self.approvals = approvals or []
         self.confirm = confirm
+
+    def extend(self, tools: list[Tool]) -> None:
+        """Add tools while protecting the registry from ambiguous names."""
+        for tool in tools:
+            name = tool.spec.name
+            if not name:
+                raise ValueError("tool name must not be empty")
+            if name in self._tools:
+                raise ValueError(f"duplicate tool name: {name}")
+            self._tools[name] = tool
 
     @property
     def specs(self) -> list[ToolSpec]:

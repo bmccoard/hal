@@ -15,6 +15,7 @@ from .agent import Agent, Event, EventKind
 from .cancellation import CancelledError, CancellationToken, cancel_on_sigint
 from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
+from .extensions import load_extensions
 from .git import GitError, create_git_backend
 from .providers import ProviderError, create_provider
 from .sayings import startup_saying
@@ -91,9 +92,13 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
         try: return input(f"{prompt} [y/N] ").strip().lower() in {"y", "yes"}
         except (EOFError, KeyboardInterrupt): return False
 
-    agent = Agent(provider, config.model, system, default_registry(
-                      cwd, workspace_root(cwd), config.tool_approvals if interactive else None,
-                      (confirm_handler or confirm) if interactive else None, config.git_backend),
+    root = workspace_root(cwd)
+    registry = default_registry(
+        cwd, root, config.tool_approvals if interactive else None,
+        (confirm_handler or confirm) if interactive else None, config.git_backend,
+    )
+    load_extensions(registry, config.extensions, cwd, root, config.extension_config)
+    agent = Agent(provider, config.model, system, registry,
                   messages=session.messages if session else None, usage=session.usage if session else None,
                   on_event=event_handler or event)
     return agent, skills, phases
@@ -329,7 +334,7 @@ def _run_interactive(
         return run_chat(stdout, stderr, session_id)
     if missing := _missing_tui_dependencies():
         names = ", ".join(missing)
-        guidance = "run 'python -m pip install -e .' to install the TUI dependencies"
+        guidance = "run 'python -m pip install -e \".[tui]\"' to install the TUI dependencies"
         if require_tui:
             print(f"hal tui: missing {names}; {guidance}", file=stderr)
             return 1

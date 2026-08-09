@@ -41,7 +41,8 @@ Use the dedicated Git tools for every repository operation, including git_init w
 creating a repository and git_stage/git_unstage for staging. Do not invoke Git through
 the shell, probe for or install a Git executable, or write ad hoc Python/Dulwich scripts
 when the dedicated tools are available. The configured auto backend transparently
-falls back to Dulwich when no Git executable is installed. Never read, quote, rewrite,
+falls back to Dulwich when no Git executable is installed and Dulwich is available.
+Never read, quote, rewrite,
 or stage local credential/configuration files to make them committable; exclude them,
 identify only their paths, and recommend an ignore rule. Treat "check in" and "commit"
 as authorization for one local commit only: inspect status and diffs first, include
@@ -181,7 +182,8 @@ def build_system(config: Config, cwd: Path, skills: list[Skill], phases: dict[st
         "- Use git_init, git_stage, git_unstage, git_status, git_diff, git_log, "
         "git_commit, and git_push; "
         "do not test for or install a Git executable.\n"
-        "- The auto preference selects Dulwich automatically when native Git is unavailable."
+        "- The auto preference selects Dulwich when native Git is unavailable and "
+        "Dulwich is installed."
     )
     text += "\n\n# Named phases\n" + "".join(f"\n- `/{p.name}`: {p.description}" for p in phases.values())
     if skills:

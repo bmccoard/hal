@@ -37,6 +37,13 @@ features:
   # Reserved: parsed, but provider prompt caching is not implemented yet.
   prompt_caching: true
 
+# Installed tool extensions are never loaded unless explicitly enabled here.
+# extensions:
+#   - jellyfin
+# extension_config:
+#   jellyfin:
+#     url: http://localhost:8096
+
 # Active in the TUI: concise tool receipts are the default; verbose mode shows
 # complete call/result cards. The basic REPL retains its compact fixed view.
 output:
