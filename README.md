@@ -244,6 +244,9 @@ exceeds the limit rather than making commit-safety decisions from truncated data
   themselves.
 - **Named phases** are built-in one-turn instruction modes: `/design`, `/plan`,
   `/build`, and `/review`.
+- **Workflows** run bounded ordered phases in one interactive request. Use
+  `/workflow feature <request>` for `design -> plan -> build -> review`, and
+  `/workflows` to list available workflows.
 
 ### Tool extensions
 

@@ -12,6 +12,8 @@ plans that are safe to keep in the repository.
 | Interactive terminal experience | [Terminal interface](designs/terminal-interface.md) | [Python parity](roadmaps/python-parity.md) | First slice implemented | Complete Linux smoke test and improve transcript/composer polish |
 | Organization-system integration | [Integration design](designs/organization-integration.md) | [Integration roadmap](roadmaps/organization-integration.md) | Direction accepted; not started | Select the separate project name and contract |
 | Portable Git operations | [Git integration](designs/git-integration.md) | [Python parity](roadmaps/python-parity.md) | Implemented | Expand backend parity coverage as new Git operations are added |
+| External architecture comparison | [OpenClaw comparison](designs/openclaw-comparison.md) | [Python parity](roadmaps/python-parity.md) | Reference analysis | Selectively evaluate compaction, durable memory, extension inspection, and tool policy |
+| Workflow orchestration | [Workflow design](designs/workflows.md) | [Python parity](roadmaps/python-parity.md) | Initial implementation complete | Evaluate checkpoints and declarative workflow configuration after interactive use |
 
 ## Document roles
 

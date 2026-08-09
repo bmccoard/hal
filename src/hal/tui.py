@@ -25,6 +25,7 @@ from .providers import ProviderError
 from .sayings import startup_saying
 from .sessions import Session, SessionStore, short_session_id
 from .tools import BashTool
+from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -238,10 +239,18 @@ class HalTui(App[int]):
             skill_names = ", ".join(f"/{item.name}" for item in self.skills)
             extras = ", ".join(value for value in (phase_names, skill_names) if value)
             self._write(Text(
-                "Commands: /help, /sessions, /resume <short-id>, /clear, "
-                "/model <id>, /exit" + (f" · phases/skills: {extras}" if extras else ""),
+                "Commands: /help, /workflows, /workflow <name> <request>, "
+                "/sessions, /resume <short-id>, /clear, /model <id>, /exit"
+                + (f" · phases/skills: {extras}" if extras else ""),
                 style="bold",
             ))
+            return True
+        if text == "/workflows":
+            lines = "\n".join(
+                f"{workflow.name}  {workflow.description}"
+                for workflow in WORKFLOWS.values()
+            )
+            self._write(Text(lines, style="cyan"))
             return True
         if text == "/clear":
             self.action_clear_conversation()
@@ -310,8 +319,38 @@ class HalTui(App[int]):
         if text.startswith("!"):
             self._run_shell(text[1:].strip(), self.cancellation)
         else:
-            expanded, display = expand_user_input(text, self.skills, self.phases)
-            self._run_agent(expanded, display, self.cancellation)
+            try:
+                parsed = parse_workflow_command(text)
+            except ValueError as exc:
+                self._write_error(str(exc), "yellow")
+                self._finish_turn()
+                return
+            if parsed:
+                workflow, request = parsed
+                self._run_workflow(workflow, request, self.cancellation)
+            else:
+                expanded, display = expand_user_input(text, self.skills, self.phases)
+                self._run_agent(expanded, display, self.cancellation)
+
+    @work(thread=True, exclusive=True, group="turn")
+    def _run_workflow(self, workflow, request: str, cancellation: CancellationToken) -> None:
+        try:
+            run_workflow(
+                self.agent, workflow, request, self.phases, cancellation,
+                lambda index, total, name: self.call_from_thread(
+                    self._write,
+                    Text(
+                        f"Workflow {workflow.name} · {index}/{total} · {name}",
+                        style="bold cyan",
+                    ),
+                ),
+            )
+        except CancelledError as exc:
+            self.call_from_thread(self._write_error, f"Interrupted: {exc}", "yellow")
+        except (ProviderError, OSError, ValueError, RuntimeError) as exc:
+            self.call_from_thread(self._write_error, f"Workflow: {exc}", "bold red")
+        finally:
+            self.call_from_thread(self._finish_turn)
 
     @work(thread=True, exclusive=True, group="turn")
     def _run_agent(self, expanded: str, display: str, cancellation: CancellationToken) -> None:

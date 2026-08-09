@@ -21,6 +21,7 @@ from .providers import ProviderError, create_provider
 from .sayings import startup_saying
 from .sessions import Metadata, Session, SessionStore, short_session_id
 from .tools import BashTool, default_registry, workspace_root
+from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
 
 
 USAGE = """HAL — a Python coding agent
@@ -368,7 +369,11 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
             if text in {"/exit", "/quit"}: break
             if text == "/help":
                 names = ", ".join(f"/{x}" for x in phases) + (", " + ", ".join(f"/{x.name}" for x in skills) if skills else "")
-                print(f"Commands: /help, /sessions [-v], /resume <short-id>, /clear, /model <id>, /exit; phases/skills: {names}", file=stdout); continue
+                print(f"Commands: /help, /workflows, /workflow <name> <request>, /sessions [-v], /resume <short-id>, /clear, /model <id>, /exit; phases/skills: {names}", file=stdout); continue
+            if text == "/workflows":
+                for workflow in WORKFLOWS.values():
+                    print(f"{workflow.name}\t{workflow.description}", file=stdout)
+                continue
             if text == "/sessions" or text in {"/sessions -v", "/sessions --verbose"}:
                 try:
                     items = store.list()
@@ -421,11 +426,21 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
                 except (OSError, ValueError, RuntimeError) as exc:
                     print(f"error: {exc}", file=stderr)
                 continue
-            expanded, display = expand_user_input(text, skills, phases)
             cancellation = CancellationToken()
             try:
                 with cancel_on_sigint(cancellation):
-                    agent.send(expanded, display, cancellation)
+                    parsed = parse_workflow_command(text)
+                    if parsed:
+                        workflow, request = parsed
+                        run_workflow(
+                            agent, workflow, request, phases, cancellation,
+                            lambda index, total, name: print(
+                                f"\n[{index}/{total}] {name}", file=stdout,
+                            ),
+                        )
+                    else:
+                        expanded, display = expand_user_input(text, skills, phases)
+                        agent.send(expanded, display, cancellation)
                 print(file=stdout)
             except CancelledError as exc:
                 print(f"interrupted: {exc}", file=stderr)
