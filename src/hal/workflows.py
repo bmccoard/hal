@@ -25,6 +25,9 @@ WORKFLOWS = {
 }
 
 _READ_ONLY_TOOLS = {"glob", "grep", "read_file", "git_status", "git_diff", "git_log"}
+_WORKFLOW_DENIED_GIT_TOOLS = {
+    "git_init", "git_stage", "git_unstage", "git_commit", "git_push",
+}
 
 
 def parse_workflow_command(text: str) -> tuple[Workflow, str] | None:
@@ -75,6 +78,7 @@ def run_workflow(
             f"/workflow {workflow.name} [{name}] {request}",
             cancellation,
             allowed_tools=_READ_ONLY_TOOLS if name in {"design", "plan"} else None,
+            denied_tools=_WORKFLOW_DENIED_GIT_TOOLS,
         )
         if not result.strip():
             raise RuntimeError(

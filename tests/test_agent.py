@@ -194,6 +194,22 @@ def test_allowed_tools_limit_schema_and_execution() -> None:
     assert "not available in this workflow phase" in result.content
 
 
+def test_denied_tools_are_hidden_and_cannot_execute() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock(
+            "tool_use", id="call-1", name="noop", input={},
+        )], "tool_use"),
+        Response([ContentBlock("text", text="Done.")], "end_turn"),
+    ])
+    agent = Agent(provider, "model", "system", Registry([NoopTool()]))
+
+    assert agent.send("start", denied_tools={"noop"}) == "Done."
+    assert provider.requests[0].tools == []
+    result = agent.messages[2].content[0]
+    assert result.is_error is True
+    assert "not available in this workflow phase" in result.content
+
+
 def test_unknown_stop_reason_keeps_safe_text_and_does_not_run_tool(tmp_path: Path) -> None:
     target = tmp_path / "must-not-exist.txt"
     provider = ScriptedProvider([Response([

@@ -99,7 +99,8 @@ class Agent:
 
     def send(self, text: str, display_text: str = "",
              cancellation: CancellationToken | None = None,
-             allowed_tools: set[str] | None = None) -> str:
+             allowed_tools: set[str] | None = None,
+             denied_tools: set[str] | None = None) -> str:
         if not text.strip():
             raise AgentError("message is empty")
         cancellation = cancellation_or_default(cancellation)
@@ -112,7 +113,7 @@ class Agent:
                 cancellation.raise_if_cancelled()
                 request = Request(
                     model=self.model, system=self.system, messages=list(self.messages),
-                    tools=self.tools.specs_for(allowed_tools),
+                    tools=self.tools.specs_for(allowed_tools, denied_tools),
                 )
                 stream = getattr(self.provider, "stream", None)
                 streamed = callable(stream) and getattr(self.provider, "streaming_enabled", True)
@@ -202,7 +203,8 @@ class Agent:
                     try:
                         cancellation.raise_if_cancelled()
                         output = self.tools.run(
-                            call.name, call.input, cancellation, allowed_tools,
+                            call.name, call.input, cancellation,
+                            allowed_tools, denied_tools,
                         )
                     except CancelledError as exc:
                         cancelled = exc

@@ -43,8 +43,11 @@ push changes, access unrelated data, or perform external side effects.
 
 Design and plan receive only the read-only `glob`, `grep`, `read_file`, `git_status`,
 `git_diff`, and `git_log` tools. Build and review retain the normal configured tool
-set. A model call to a tool outside the phase allowlist is rejected even if the model
-invents the hidden tool name.
+set except for repository mutation: `git_init`, `git_stage`, `git_unstage`,
+`git_commit`, and `git_push` are unavailable throughout the workflow. Committing or
+pushing requires a separate explicit user request after the workflow completes. A
+model call to a tool outside the phase policy is rejected even if the model invents
+the hidden tool name.
 
 ## State and failure behavior
 

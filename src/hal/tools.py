@@ -393,22 +393,26 @@ class Registry:
     def specs(self) -> list[ToolSpec]:
         return [self._tools[name].spec for name in sorted(self._tools)]
 
-    def specs_for(self, allowed: set[str] | None = None) -> list[ToolSpec]:
-        """Return all specs, or only explicitly allowed specs for a scoped turn."""
-        if allowed is None:
-            return self.specs
+    def specs_for(self, allowed: set[str] | None = None,
+                  denied: set[str] | None = None) -> list[ToolSpec]:
+        """Return tool specs filtered by an optional phase policy."""
+        denied = denied or set()
         return [
             self._tools[name].spec for name in sorted(self._tools)
-            if name in allowed
+            if (allowed is None or name in allowed) and name not in denied
         ]
 
     def run(self, name: str, arguments: dict[str, Any],
             cancellation: CancellationToken | None = None,
-            allowed: set[str] | None = None) -> str:
+            allowed: set[str] | None = None,
+            denied: set[str] | None = None) -> str:
         cancellation = cancellation_or_default(cancellation)
         cancellation.raise_if_cancelled()
-        if allowed is not None and name not in allowed:
-            available = ", ".join(sorted(allowed)) or "none"
+        denied = denied or set()
+        if name in denied or (allowed is not None and name not in allowed):
+            available = ", ".join(
+                spec.name for spec in self.specs_for(allowed, denied)
+            ) or "none"
             raise PermissionError(
                 f"tool {name!r} is not available in this workflow phase; "
                 f"available tools: {available}"

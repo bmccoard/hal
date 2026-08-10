@@ -268,6 +268,8 @@ HAL> /workflow feature Add a status-bar preference to the terminal interface
 
 Each phase is a separate agent turn preserved in the session. Press Ctrl-C to
 cancel the current step and prevent later steps from starting.
+Feature workflows cannot initialize a repository, change the index, commit, or push.
+Review the completed changes first, then request any Git mutation separately.
 
 ### Tool extensions
 

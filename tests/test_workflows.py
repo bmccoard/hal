@@ -23,8 +23,11 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
     calls = []
 
     class Agent:
-        def send(self, prompt, display, cancellation, allowed_tools=None):
-            calls.append((prompt, display, cancellation, allowed_tools))
+        def send(self, prompt, display, cancellation, allowed_tools=None,
+                 denied_tools=None):
+            calls.append((
+                prompt, display, cancellation, allowed_tools, denied_tools,
+            ))
             return display
 
     phases = resolve_phases(Config(phases={
@@ -42,6 +45,8 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
     assert all("Original workflow request:\nadd retries" in call[0] for call in calls)
     assert "bash" not in calls[0][3]
     assert calls[2][3] is None
+    assert all("git_commit" in call[4] for call in calls)
+    assert all("git_push" in call[4] for call in calls)
     assert len(results) == 4
 
 
