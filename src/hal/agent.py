@@ -105,11 +105,13 @@ class Agent:
              cancellation: CancellationToken | None = None,
              allowed_tools: set[str] | None = None,
              denied_tools: set[str] | None = None,
-             protect_existing_files: bool = False) -> str:
+             protect_existing_files: bool = False,
+             include_history: bool = True) -> str:
         if not text.strip():
             raise AgentError("message is empty")
         cancellation = cancellation_or_default(cancellation)
         self._send_started = time.monotonic()
+        turn_start = len(self.messages)
         self.messages.append(Message("user", [ContentBlock("text", text=text)], display_text=display_text))
         final_parts: list[str] = []
         malformed_counts: dict[str, int] = {}
@@ -119,7 +121,8 @@ class Agent:
             try:
                 cancellation.raise_if_cancelled()
                 request = Request(
-                    model=self.model, system=self.system, messages=list(self.messages),
+                    model=self.model, system=self.system,
+                    messages=list(self.messages if include_history else self.messages[turn_start:]),
                     tools=self.tools.specs_for(allowed_tools, denied_tools),
                 )
                 stream = getattr(self.provider, "stream", None)

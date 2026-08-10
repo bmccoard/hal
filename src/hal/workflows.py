@@ -28,6 +28,23 @@ _READ_ONLY_TOOLS = {"glob", "grep", "read_file", "git_status", "git_diff", "git_
 _WORKFLOW_DENIED_GIT_TOOLS = {
     "git_init", "git_stage", "git_unstage", "git_commit", "git_push",
 }
+_PHASE_HANDOFF_MAX_CHARS = 4_000
+
+
+def _phase_handoffs(names: tuple[str, ...], results: list[str]) -> str:
+    """Return bounded final responses without carrying earlier tool transcripts."""
+    if not results:
+        return ""
+    sections = []
+    for name, result in zip(names, results):
+        value = result.strip()
+        if len(value) > _PHASE_HANDOFF_MAX_CHARS:
+            value = value[:_PHASE_HANDOFF_MAX_CHARS].rstrip() + "\n[handoff truncated]"
+        sections.append(f"### {name}\n{value}")
+    return (
+        "\n\nPrior phase handoffs (final responses only; inspect the workspace to "
+        "verify current state):\n" + "\n\n".join(sections)
+    )
 
 
 def parse_workflow_command(text: str) -> tuple[Workflow, str] | None:
@@ -72,6 +89,7 @@ def run_workflow(
             "Treat changes that existed before this workflow as user-owned work. "
             "Do not claim them as changes made during this workflow.\n\n"
             f"Original workflow request:\n{request}"
+            f"{_phase_handoffs(workflow.phases, results)}"
         )
         result = agent.send(
             prompt,
@@ -80,6 +98,7 @@ def run_workflow(
             allowed_tools=_READ_ONLY_TOOLS if name in {"design", "plan"} else None,
             denied_tools=_WORKFLOW_DENIED_GIT_TOOLS,
             protect_existing_files=name in {"build", "review"},
+            include_history=False,
         )
         if not result.strip():
             raise RuntimeError(

@@ -266,7 +266,10 @@ Run a workflow with a feature request:
 HAL> /workflow feature Add a status-bar preference to the terminal interface
 ```
 
-Each phase is a separate agent turn preserved in the session. Press Ctrl-C to
+Each phase is a separate agent turn preserved in the session. To keep model input
+bounded, a new phase receives only the final responses from earlier phases (up to
+4,000 characters each), not their file contents, test output, or tool-call history.
+The complete transcript remains available in the saved session. Press Ctrl-C to
 cancel the current step and prevent later steps from starting.
 Feature workflows cannot initialize a repository, change the index, commit, or push.
 Review the completed changes first, then request any Git mutation separately.

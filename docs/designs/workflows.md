@@ -30,10 +30,12 @@ business-process engine.
 ## User contract
 
 `/workflows` lists available workflows. `/workflow feature <request>` runs all four
-steps in order in the current session. Each step is a separate agent turn, so its
-output and tool calls are preserved in the ordinary transcript and later steps can
-use earlier results. Cancellation stops the current step and prevents later steps
-from starting.
+steps in order in the current session. Each step is a separate agent turn. Its full
+output and tool calls are preserved in the ordinary transcript, but they are not
+replayed to the provider in later steps. Instead, each later phase receives the
+bounded final responses of completed phases as handoffs and inspects the workspace
+for authoritative state. Cancellation stops the current step and prevents later
+steps from starting.
 
 Invoking the `feature` workflow explicitly requests implementation. The design and
 plan steps do not mutate production code; the build and review steps may make the
@@ -56,6 +58,9 @@ original request, ordered phase names, and current step. Durable history remains
 normal HAL session transcript.
 
 - Steps execute serially and exactly once.
+- Provider context is isolated per phase. Earlier final responses are included as
+  handoffs capped at 4,000 characters per phase; earlier tool calls and results stay
+  in the saved session but do not consume later-phase model input.
 - A missing configured phase fails before the first step begins.
 - Provider, tool, or cancellation errors stop the workflow; remaining steps do not
   run. The interactive shell then performs its normal session snapshot, preserving

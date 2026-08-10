@@ -105,6 +105,22 @@ def test_agent_forwards_stream_deltas_without_reemitting_final_text() -> None:
     assert events[-1].kind == EventKind.DONE
 
 
+def test_agent_can_isolate_a_turn_without_discarding_saved_history() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock("text", text="first")]),
+        Response([ContentBlock("text", text="second")]),
+    ])
+    agent = Agent(provider, "model", "system", Registry([]))
+
+    assert agent.send("one") == "first"
+    assert agent.send("two", include_history=False) == "second"
+
+    assert len(provider.requests[0].messages) == 1
+    assert len(provider.requests[1].messages) == 1
+    assert provider.requests[1].messages[0].content[0].text == "two"
+    assert len(agent.messages) == 4
+
+
 def test_tool_turn_is_committed_only_after_all_results_exist(tmp_path: Path) -> None:
     provider = ScriptedProvider([Response([
         ContentBlock("tool_use", id="call-1", name="interrupt", input={}),

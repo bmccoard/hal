@@ -24,10 +24,11 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
 
     class Agent:
         def send(self, prompt, display, cancellation, allowed_tools=None,
-                 denied_tools=None, protect_existing_files=False):
+                 denied_tools=None, protect_existing_files=False,
+                 include_history=True):
             calls.append((
                 prompt, display, cancellation, allowed_tools, denied_tools,
-                protect_existing_files,
+                protect_existing_files, include_history,
             ))
             return display
 
@@ -51,7 +52,28 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
     assert calls[0][5] is False
     assert calls[2][5] is True
     assert calls[3][5] is True
+    assert all(call[6] is False for call in calls)
+    assert "Prior phase handoffs" not in calls[0][0]
+    assert "### design\n/workflow feature [design] add retries" in calls[1][0]
+    assert "### plan\n/workflow feature [plan] add retries" in calls[2][0]
     assert len(results) == 4
+
+
+def test_workflow_bounds_phase_handoffs() -> None:
+    prompts = []
+
+    class Agent:
+        def send(self, prompt, *_args, **_kwargs):
+            prompts.append(prompt)
+            return "x" * 5_000
+
+    run_workflow(
+        Agent(), WORKFLOWS["feature"], "change", resolve_phases(Config()),
+        CancellationToken(),
+    )
+
+    assert "[handoff truncated]" in prompts[1]
+    assert "x" * 4_001 not in prompts[1]
 
 
 def test_workflow_stops_after_step_failure() -> None:
