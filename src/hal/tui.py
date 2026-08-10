@@ -247,7 +247,7 @@ class HalTui(App[int]):
             return True
         if text == "/workflows":
             lines = "\n".join(
-                f"{workflow.name}  {workflow.description}"
+                f"{workflow.name}  {' -> '.join(workflow.phases)}  {workflow.description}"
                 for workflow in WORKFLOWS.values()
             )
             self._write(Text(lines, style="cyan"))

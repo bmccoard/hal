@@ -30,6 +30,29 @@ def test_unknown_command_returns_usage_error() -> None:
     assert "unknown command: wat" in error.getvalue()
 
 
+def test_repl_workflows_displays_ordered_phases(monkeypatch, tmp_path) -> None:
+    store = SessionStore(tmp_path / "sessions")
+    config = SimpleNamespace(
+        provider="fake", model="model", openai_auth="api_key",
+    )
+    agent = SimpleNamespace(messages=[], usage=Usage(), model="model")
+    monkeypatch.setattr("hal.cli.SessionStore", lambda: store)
+    monkeypatch.setattr("hal.cli.load_config", lambda _cwd: config)
+    monkeypatch.setattr(
+        "hal.cli._make_agent", lambda *_args, **_kwargs: (agent, [], {}),
+    )
+    inputs = iter(["/workflows", "/exit"])
+    monkeypatch.setattr("builtins.input", lambda _prompt="": next(inputs))
+    output, error = io.StringIO(), io.StringIO()
+
+    assert run_chat(output, error) == 0
+    assert (
+        "feature\tdesign -> plan -> build -> review\t"
+        "Design, plan, build, and review one requested repository change"
+    ) in output.getvalue()
+    assert error.getvalue() == ""
+
+
 def test_interactive_cli_selects_tui_for_terminal_and_honors_fallback(
     monkeypatch,
 ) -> None:

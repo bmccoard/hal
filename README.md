@@ -258,6 +258,7 @@ List available workflows:
 
 ```text
 HAL> /workflows
+feature  design -> plan -> build -> review  Design, plan, build, and review one requested repository change
 ```
 
 Run a workflow with a feature request:

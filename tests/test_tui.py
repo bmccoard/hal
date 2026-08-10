@@ -5,6 +5,8 @@ from pathlib import Path
 import threading
 from types import SimpleNamespace
 
+from textual.containers import VerticalScroll
+
 from hal.agent import Event, EventKind
 from hal.cancellation import CancellationToken
 from hal.config import Config
@@ -156,6 +158,25 @@ def test_tui_cancel_interrupts_active_worker_and_returns_to_composer(tmp_path: P
                     break
             assert not app.busy
             assert app.cancellation is None
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
+def test_tui_workflows_command_displays_phases(tmp_path: Path) -> None:
+    app, _agent, _store = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            composer = app.query_one("#composer")
+            composer.text = "/workflows"
+            await pilot.press("enter")
+            await pilot.pause(0.1)
+            transcript = app.query_one("#transcript", VerticalScroll)
+            entries = transcript.query(".transcript-entry")
+            text = " ".join(str(entry.render()) for entry in entries)
+            assert "feature" in text
+            assert "design -> plan -> build -> review" in text
             app.action_safe_quit()
 
     asyncio.run(scenario())

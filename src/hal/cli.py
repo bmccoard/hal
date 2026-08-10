@@ -373,7 +373,8 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
                 print(f"Commands: /help, /workflows, /workflow <name> <request>, /sessions [-v], /resume <short-id>, /clear, /model <id>, /exit; phases/skills: {names}", file=stdout); continue
             if text == "/workflows":
                 for workflow in WORKFLOWS.values():
-                    print(f"{workflow.name}\t{workflow.description}", file=stdout)
+                    phases_str = " -> ".join(workflow.phases)
+                    print(f"{workflow.name}\t{phases_str}\t{workflow.description}", file=stdout)
                 continue
             if text == "/sessions" or text in {"/sessions -v", "/sessions --verbose"}:
                 try:
