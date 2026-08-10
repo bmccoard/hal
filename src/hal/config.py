@@ -42,6 +42,8 @@ class Config:
     git_backend: str = "auto"
     subagents: dict[str, str] = field(default_factory=dict)
     tool_approvals: list[str] = field(default_factory=list)
+    only_write_locally: bool = False
+    bash_policy: str = "normal"
     extensions: list[str] = field(default_factory=list)
     extension_config: dict[str, dict[str, Any]] = field(default_factory=dict)
     context_window_tokens: int = 200_000
@@ -79,6 +81,8 @@ class Config:
             raise ValueError("openai_auth must be 'api_key' or 'subscription'")
         if self.git_backend not in {"auto", "native", "dulwich"}:
             raise ValueError("git.backend must be 'auto', 'native', or 'dulwich'")
+        if self.bash_policy not in {"normal", "approve", "deny"}:
+            raise ValueError("bash_policy must be 'normal', 'approve', or 'deny'")
         if not self.model:
             if profile and profile.model:
                 self.model = profile.model
@@ -211,6 +215,8 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         git_backend=str(git.get("backend") or "auto").strip().lower(),
         subagents=dict(data.get("subagents") or {}),
         tool_approvals=list(data.get("tool_approvals") or []),
+        only_write_locally=_bool(data, "only_write_locally", False),
+        bash_policy=str(data.get("bash_policy") or "normal").strip().lower(),
         extensions=list(extensions),
         extension_config=dict(extension_config),
         context_window_tokens=int(compaction.get("context_window_tokens", 200_000)),

@@ -24,9 +24,10 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
 
     class Agent:
         def send(self, prompt, display, cancellation, allowed_tools=None,
-                 denied_tools=None):
+                 denied_tools=None, protect_existing_files=False):
             calls.append((
                 prompt, display, cancellation, allowed_tools, denied_tools,
+                protect_existing_files,
             ))
             return display
 
@@ -47,6 +48,9 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
     assert calls[2][3] is None
     assert all("git_commit" in call[4] for call in calls)
     assert all("git_push" in call[4] for call in calls)
+    assert calls[0][5] is False
+    assert calls[2][5] is True
+    assert calls[3][5] is True
     assert len(results) == 4
 
 

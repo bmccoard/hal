@@ -373,11 +373,16 @@ class GrepTool(_RootedTool):
 
 class Registry:
     def __init__(self, tools: list[Tool], approvals: list[str] | None = None,
-                 confirm: Callable[[str], bool] | None = None) -> None:
+                 confirm: Callable[[str], bool] | None = None,
+                 write_root: Path | None = None, cwd: Path | None = None,
+                 bash_policy: str = "normal") -> None:
         self._tools: dict[str, Tool] = {}
         self.extend(tools)
         self.approvals = approvals or []
         self.confirm = confirm
+        self.write_root = write_root.resolve() if write_root else None
+        self.cwd = (cwd or Path.cwd()).resolve()
+        self.bash_policy = bash_policy
 
     def extend(self, tools: list[Tool]) -> None:
         """Add tools while protecting the registry from ambiguous names."""
@@ -405,7 +410,8 @@ class Registry:
     def run(self, name: str, arguments: dict[str, Any],
             cancellation: CancellationToken | None = None,
             allowed: set[str] | None = None,
-            denied: set[str] | None = None) -> str:
+            denied: set[str] | None = None,
+            protect_existing_files: bool = False) -> str:
         cancellation = cancellation_or_default(cancellation)
         cancellation.raise_if_cancelled()
         denied = denied or set()
@@ -425,26 +431,63 @@ class Registry:
             raise ValueError(
                 f"unknown tool: {name}{hint}; available tools: {available}"
             ) from exc
+        execution_arguments = dict(arguments)
+        if name == "bash":
+            if self.bash_policy == "deny":
+                raise PermissionError("bash is disabled by bash_policy")
+            if self.bash_policy == "approve" and (
+                self.confirm is None
+                or not self.confirm(
+                    "Allow unrestricted bash command? Shell effects are not "
+                    "confined by only_write_locally."
+                )
+            ):
+                raise PermissionError("bash was denied by bash_policy")
+        if name in {"write_file", "edit_file"}:
+            raw_path = arguments.get("path")
+            if isinstance(raw_path, str) and raw_path:
+                path = Path(raw_path)
+                resolved = (
+                    path.resolve() if path.is_absolute()
+                    else (self.cwd / path).resolve()
+                )
+                execution_arguments["path"] = str(resolved)
+                if self.write_root is not None:
+                    try:
+                        resolved.relative_to(self.write_root)
+                    except ValueError:
+                        if self.confirm is None or not self.confirm(
+                            f"Allow {name} outside workspace: {resolved}?"
+                        ):
+                            raise PermissionError(
+                                f"{name} outside workspace was denied: {resolved}"
+                            )
+                if name == "write_file" and protect_existing_files and resolved.exists():
+                    raise PermissionError(
+                        f"write_file cannot replace existing file {resolved} in a workflow; "
+                        "use edit_file for an exact replacement"
+                    )
         target = str(arguments.get("command", "")) if name == "bash" else name
         needs_approval = any(target == rule or (name == "bash" and target.startswith(rule) and (len(target) == len(rule) or target[len(rule)].isspace())) for rule in self.approvals)
         if needs_approval and (self.confirm is None or not self.confirm(f"Allow {name}: {target}?")):
             raise PermissionError(f"{name} was denied by the user")
         cancellation.raise_if_cancelled()
-        output = tool.run(arguments, cancellation)
+        output = tool.run(execution_arguments, cancellation)
         cancellation.raise_if_cancelled()
         return bound_output(output)
 
 
 def default_registry(cwd: Path, root: Path | None = None, approvals: list[str] | None = None,
                      confirm: Callable[[str], bool] | None = None,
-                     git_backend: str = "auto") -> Registry:
+                     git_backend: str = "auto", only_write_locally: bool = False,
+                     bash_policy: str = "normal") -> Registry:
     root = (root or workspace_root(cwd)).resolve()
     from .git_tools import git_tools
 
     return Registry([
         BashTool(cwd), ReadFileTool(), WriteFileTool(), EditFileTool(),
         GrepTool(root), GlobTool(root), *git_tools(root, git_backend),
-    ], approvals, confirm)
+    ], approvals, confirm, root if only_write_locally else None, cwd, bash_policy)
 
 
 def workspace_root(cwd: Path) -> Path:

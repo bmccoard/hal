@@ -11,6 +11,13 @@ git:
   backend: auto
   # backend: dulwich
 
+# Restrict built-in write_file/edit_file calls to the Git workspace. Outside
+# paths require interactive approval and are denied in headless mode. Shell and
+# extension code cannot be path-confined by this setting; control model-issued
+# shell access independently with bash_policy: normal, approve, or deny.
+only_write_locally: true
+bash_policy: normal
+
 # Optional interactive confirmations. These are user-interface friction, not a
 # security boundary, and literal prefixes do not detect every indirect command.
 # tool_approvals:

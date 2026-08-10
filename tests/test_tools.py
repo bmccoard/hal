@@ -202,3 +202,71 @@ def test_registry_can_be_extended_but_rejects_name_collisions() -> None:
     assert {spec.name for spec in registry.specs} == {"one", "two"}
     with pytest.raises(ValueError, match="duplicate tool name: one"):
         registry.extend([NamedTool("one")])
+
+
+def test_local_write_policy_allows_workspace_and_denies_outside_headlessly(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "repo"; root.mkdir()
+    outside = tmp_path / "outside.txt"
+    registry = Registry(
+        [WriteFileTool(), EditFileTool()], write_root=root, cwd=root,
+    )
+
+    registry.run("write_file", {"path": "inside.txt", "content": "ok"})
+    assert (root / "inside.txt").read_text(encoding="utf-8") == "ok"
+    with pytest.raises(PermissionError, match="outside workspace was denied"):
+        registry.run("write_file", {"path": str(outside), "content": "bad"})
+    assert not outside.exists()
+
+
+def test_local_write_policy_can_approve_outside_path(tmp_path: Path) -> None:
+    root = tmp_path / "repo"; root.mkdir()
+    outside = tmp_path / "outside.txt"
+    prompts = []
+    registry = Registry(
+        [WriteFileTool()], confirm=lambda prompt: prompts.append(prompt) or True,
+        write_root=root, cwd=root,
+    )
+
+    registry.run("write_file", {"path": str(outside), "content": "approved"})
+
+    assert outside.read_text(encoding="utf-8") == "approved"
+    assert "outside workspace" in prompts[0]
+
+
+def test_local_write_policy_resolves_symlink_escape(tmp_path: Path) -> None:
+    root = tmp_path / "repo"; root.mkdir()
+    outside = tmp_path / "outside"; outside.mkdir()
+    try:
+        (root / "link").symlink_to(outside, target_is_directory=True)
+    except OSError:
+        pytest.skip("directory symlinks are unavailable")
+    registry = Registry([WriteFileTool()], write_root=root, cwd=root)
+
+    with pytest.raises(PermissionError, match="outside workspace was denied"):
+        registry.run(
+            "write_file", {"path": "link/escaped.txt", "content": "bad"},
+        )
+    assert not (outside / "escaped.txt").exists()
+
+
+def test_workflow_write_file_cannot_replace_existing_file(tmp_path: Path) -> None:
+    target = tmp_path / "README.md"
+    target.write_text("original", encoding="utf-8")
+    registry = Registry([WriteFileTool()], cwd=tmp_path)
+
+    with pytest.raises(PermissionError, match="use edit_file"):
+        registry.run(
+            "write_file", {"path": "README.md", "content": "replacement"},
+            protect_existing_files=True,
+        )
+    assert target.read_text(encoding="utf-8") == "original"
+
+
+@pytest.mark.parametrize("policy", ["approve", "deny"])
+def test_bash_policy_denies_without_approval(tmp_path: Path, policy: str) -> None:
+    registry = Registry([BashTool(tmp_path)], cwd=tmp_path, bash_policy=policy)
+
+    with pytest.raises(PermissionError, match="bash"):
+        registry.run("bash", {"command": "printf should-not-run"})

@@ -64,6 +64,10 @@ normal HAL session transcript.
   as successfully completed.
 - Three malformed argument calls to the same tool stop the active phase. Each
   rejected call receives a matching error result and is never executed.
+- Three consecutive identical calls with identical results stop the active phase,
+  preventing unproductive status, diff, or inspection loops.
+- Build and review cannot use `write_file` to replace an existing file. New files
+  remain supported; existing files require an exact-match `edit_file` operation.
 - A resumed session retains completed step messages, but version one does not
   automatically resume a partially completed workflow.
 - Review uses HAL's existing review phase, which may fix valid in-scope findings and

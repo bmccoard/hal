@@ -40,6 +40,10 @@ class RepeatedMalformedToolCallError(AgentError):
     pass
 
 
+class RepeatedToolCallError(AgentError):
+    pass
+
+
 class EventKind(str, Enum):
     ASSISTANT_TEXT = "assistant_text"
     ASSISTANT_COMMENTARY = "assistant_commentary"
@@ -100,7 +104,8 @@ class Agent:
     def send(self, text: str, display_text: str = "",
              cancellation: CancellationToken | None = None,
              allowed_tools: set[str] | None = None,
-             denied_tools: set[str] | None = None) -> str:
+             denied_tools: set[str] | None = None,
+             protect_existing_files: bool = False) -> str:
         if not text.strip():
             raise AgentError("message is empty")
         cancellation = cancellation_or_default(cancellation)
@@ -108,6 +113,8 @@ class Agent:
         self.messages.append(Message("user", [ContentBlock("text", text=text)], display_text=display_text))
         final_parts: list[str] = []
         malformed_counts: dict[str, int] = {}
+        previous_tool_signature: tuple[str, str, bool, str] | None = None
+        repeated_tool_count = 0
         for _ in range(self.max_turns):
             try:
                 cancellation.raise_if_cancelled()
@@ -177,6 +184,7 @@ class Agent:
             results: list[ContentBlock] = []
             cancelled: CancelledError | None = None
             repeated_malformed: RepeatedMalformedToolCallError | None = None
+            repeated_tool: RepeatedToolCallError | None = None
             for call in calls:
                 self._emit(Event(
                     EventKind.TOOL_CALL, name=call.name, args=dict(call.input),
@@ -204,7 +212,7 @@ class Agent:
                         cancellation.raise_if_cancelled()
                         output = self.tools.run(
                             call.name, call.input, cancellation,
-                            allowed_tools, denied_tools,
+                            allowed_tools, denied_tools, protect_existing_files,
                         )
                     except CancelledError as exc:
                         cancelled = exc
@@ -214,6 +222,25 @@ class Agent:
                         error = True
                         output = str(exc)
                 output = bound_output(output)
+                signature = (
+                    call.name,
+                    repr(sorted(call.input.items())),
+                    error,
+                    output,
+                )
+                if not call.argument_error and signature == previous_tool_signature:
+                    repeated_tool_count += 1
+                else:
+                    repeated_tool_count = 1
+                previous_tool_signature = signature
+                if not call.argument_error and repeated_tool_count >= 3:
+                    output = bound_output(
+                        output + " HAL stopped this turn after three identical "
+                        f"calls to {call.name!r} with the same result."
+                    )
+                    repeated_tool = RepeatedToolCallError(
+                        f"repeated identical tool call {call.name!r}", partial,
+                    )
                 results.append(ContentBlock("tool_result", tool_use_id=call.id, content=output, is_error=error))
                 self._emit(Event(
                     EventKind.TOOL_RESULT, text=output, name=call.name,
@@ -227,6 +254,8 @@ class Agent:
                 raise cancelled
             if repeated_malformed is not None:
                 self._fail(repeated_malformed)
+            if repeated_tool is not None:
+                self._fail(repeated_tool)
         partial = "\n".join(final_parts).strip()
         error = MaxTurnsError(
             f"agent exceeded maximum of {self.max_turns} provider turns", partial

@@ -321,6 +321,8 @@ selection. Write commands in the syntax of the shell installed on the machine.
 Malformed JSON tool arguments are never executed. HAL returns a matching error
 result to the model so it can correct the call without aborting the entire turn.
 Three malformed calls to the same tool stop that turn to prevent runaway retries.
+Three identical calls with the same result also stop the turn, preventing status or
+diff polling loops from consuming the remaining context window.
 The `grep` tool continues to interpret `pattern` as a regular expression by default;
 use `literal: true` for exact text containing characters such as `*`, `[`, or `(`.
 
@@ -454,6 +456,24 @@ an environment whose filesystem, process, network, and credential access match
 your trust requirements. `tool_approvals` adds optional interactive confirmation
 for exact tool names and shell-command prefixes; it is user-interface friction,
 not an authorization boundary.
+
+For stricter built-in file writes, configure:
+
+```yaml
+only_write_locally: true
+bash_policy: normal  # normal, approve, or deny
+```
+
+With `only_write_locally`, `write_file` and `edit_file` resolve symlinks and may
+write inside the Git workspace without prompting. Outside paths require interactive
+approval and are denied in headless mode. During a feature workflow, `write_file`
+also cannot replace an existing file; the model must use exact-match `edit_file`.
+
+Shell commands and extension code are not confined by `only_write_locally`.
+`bash_policy: approve` asks before every model-issued shell command, while `deny`
+disables the model-facing shell tool. `normal` preserves current shell behavior.
+Direct `!command` input is user-authored and remains outside this model-tool policy.
+These controls reduce accidental writes but do not replace an OS sandbox.
 
 For example, this configuration asks before common Python package installation
 commands and model file writes:

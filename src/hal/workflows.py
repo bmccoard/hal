@@ -79,6 +79,7 @@ def run_workflow(
             cancellation,
             allowed_tools=_READ_ONLY_TOOLS if name in {"design", "plan"} else None,
             denied_tools=_WORKFLOW_DENIED_GIT_TOOLS,
+            protect_existing_files=name in {"build", "review"},
         )
         if not result.strip():
             raise RuntimeError(

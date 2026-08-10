@@ -9,6 +9,7 @@ from hal.agent import (
     EventKind,
     MaxOutputTokensError,
     RepeatedMalformedToolCallError,
+    RepeatedToolCallError,
     MaxTurnsError,
     UnexpectedStopReasonError,
 )
@@ -176,6 +177,22 @@ def test_three_malformed_calls_stop_turn_with_valid_transcript() -> None:
     assert len(agent.messages) == 7
     assert agent.messages[-1].content[0].is_error is True
     assert "stopped this turn after three malformed calls" in agent.messages[-1].content[0].content
+
+
+def test_three_identical_successful_calls_stop_turn() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock(
+            "tool_use", id=f"call-{index}", name="noop", input={},
+        )], "tool_use")
+        for index in range(3)
+    ])
+    agent = Agent(provider, "model", "system", Registry([NoopTool()]))
+
+    with pytest.raises(RepeatedToolCallError, match="tool call 'noop'"):
+        agent.send("start")
+
+    assert len(provider.requests) == 3
+    assert "three identical calls" in agent.messages[-1].content[0].content
 
 
 def test_allowed_tools_limit_schema_and_execution() -> None:

@@ -97,6 +97,7 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
     registry = default_registry(
         cwd, root, config.tool_approvals if interactive else None,
         (confirm_handler or confirm) if interactive else None, config.git_backend,
+        config.only_write_locally, config.bash_policy,
     )
     load_extensions(registry, config.extensions, cwd, root, config.extension_config)
     agent = Agent(provider, config.model, system, registry,

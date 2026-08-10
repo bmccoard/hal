@@ -44,6 +44,19 @@ def test_git_backend_rejects_unknown_values() -> None:
         parse_config({"git": "dulwich"})
 
 
+def test_local_write_and_bash_policies_are_validated() -> None:
+    config = parse_config({
+        "only_write_locally": True,
+        "bash_policy": "approve",
+    })
+    assert config.only_write_locally is True
+    assert config.bash_policy == "approve"
+    with pytest.raises(ValueError, match="bash_policy"):
+        parse_config({"bash_policy": "guess"})
+    with pytest.raises(ValueError, match="only_write_locally"):
+        parse_config({"only_write_locally": "yes"})
+
+
 def test_streaming_defaults_on_and_can_be_disabled() -> None:
     assert parse_config({}).streaming is True
     assert parse_config({"features": {"streaming": False}}).streaming is False
