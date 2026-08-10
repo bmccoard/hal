@@ -23,8 +23,8 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
     calls = []
 
     class Agent:
-        def send(self, prompt, display, cancellation):
-            calls.append((prompt, display, cancellation))
+        def send(self, prompt, display, cancellation, allowed_tools=None):
+            calls.append((prompt, display, cancellation, allowed_tools))
             return display
 
     phases = resolve_phases(Config(phases={
@@ -40,6 +40,8 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
     assert [item[2] for item in progress] == ["design", "plan", "build", "review"]
     assert "CUSTOM DESIGN" in calls[0][0]
     assert all("Original workflow request:\nadd retries" in call[0] for call in calls)
+    assert "bash" not in calls[0][3]
+    assert calls[2][3] is None
     assert len(results) == 4
 
 
@@ -48,7 +50,7 @@ def test_workflow_stops_after_step_failure() -> None:
         def __init__(self):
             self.calls = 0
 
-        def send(self, *_args):
+        def send(self, *_args, **_kwargs):
             self.calls += 1
             if self.calls == 2:
                 raise RuntimeError("provider failed")
@@ -61,3 +63,15 @@ def test_workflow_stops_after_step_failure() -> None:
             CancellationToken(),
         )
     assert agent.calls == 2
+
+
+def test_workflow_stops_when_phase_has_no_final_response() -> None:
+    class Agent:
+        def send(self, *_args, **_kwargs):
+            return ""
+
+    with pytest.raises(RuntimeError, match="design.*without a final response"):
+        run_workflow(
+            Agent(), WORKFLOWS["feature"], "change", resolve_phases(Config()),
+            CancellationToken(),
+        )

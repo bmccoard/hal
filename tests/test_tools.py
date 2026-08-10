@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import sys
@@ -117,6 +118,41 @@ def test_grep_rejects_path_outside_workspace(tmp_path: Path) -> None:
     root = tmp_path / "root"; root.mkdir()
     with pytest.raises(ValueError, match="escapes"):
         GrepTool(root).run({"pattern": "x", "path": "../outside"})
+
+
+def test_grep_literal_mode_matches_regex_metacharacters(tmp_path: Path) -> None:
+    path = tmp_path / "README.md"
+    path.write_text("- **Workflows** are useful\n", encoding="utf-8")
+
+    result = GrepTool(tmp_path).run({
+        "pattern": "- **Workflows**", "path": "README.md", "literal": True,
+    })
+
+    assert json.loads(result)["matches"][0]["line"] == 1
+
+
+def test_tool_schemas_explain_weak_model_constraints(tmp_path: Path) -> None:
+    specs = {spec.name: spec for spec in default_registry(
+        tmp_path, tmp_path, git_backend="dulwich",
+    ).specs}
+
+    assert specs["read_file"].input_schema["properties"]["offset"]["minimum"] == 1
+    assert specs["grep"].input_schema["properties"]["literal"]["type"] == "boolean"
+
+
+def test_glob_prunes_dependency_and_cache_directories(tmp_path: Path) -> None:
+    from hal.tools import GlobTool
+
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "app.py").write_text("", encoding="utf-8")
+    for directory in (".git", ".venv", "node_modules", "__pycache__"):
+        path = tmp_path / directory
+        path.mkdir()
+        (path / "ignored.py").write_text("", encoding="utf-8")
+
+    matches = json.loads(GlobTool(tmp_path).run({"pattern": "**/*"}))["matches"]
+
+    assert matches == ["src/app.py"]
 
 
 def test_shell_uses_powershell_on_windows(monkeypatch) -> None:

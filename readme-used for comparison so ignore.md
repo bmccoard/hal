@@ -256,13 +256,13 @@ implemented code.
 
 List available workflows:
 
-```text
+```
 HAL> /workflows
 ```
 
 Run a workflow with a feature request:
 
-```text
+```
 HAL> /workflow feature Add a status-bar preference to the terminal interface
 ```
 
@@ -315,12 +315,6 @@ the native shell explicitly. On Windows it uses `pwsh`, then Windows PowerShell,
 and falls back to `cmd.exe` only when neither is available. On Unix-like systems
 it uses Bash and falls back to `/bin/sh`. Interactive `!command` uses the same
 selection. Write commands in the syntax of the shell installed on the machine.
-
-Malformed JSON tool arguments are never executed. HAL returns a matching error
-result to the model so it can correct the call without aborting the entire turn.
-Three malformed calls to the same tool stop that turn to prevent runaway retries.
-The `grep` tool continues to interpret `pattern` as a regular expression by default;
-use `literal: true` for exact text containing characters such as `*`, `[`, or `(`.
 
 Interactive mode supports `/help`, `/sessions`, `/sessions --verbose`,
 `/resume <selector>`, `/clear`, `/model <id>`, `/exit`, the built-in `/design`,

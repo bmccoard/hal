@@ -41,6 +41,11 @@ smallest coherent changes authorized by the original request. Existing tool
 approvals still apply. The workflow grants no authority to install dependencies,
 push changes, access unrelated data, or perform external side effects.
 
+Design and plan receive only the read-only `glob`, `grep`, `read_file`, `git_status`,
+`git_diff`, and `git_log` tools. Build and review retain the normal configured tool
+set. A model call to a tool outside the phase allowlist is rejected even if the model
+invents the hidden tool name.
+
 ## State and failure behavior
 
 Workflow state is intentionally transient and consists of the workflow name,
@@ -52,6 +57,10 @@ normal HAL session transcript.
 - Provider, tool, or cancellation errors stop the workflow; remaining steps do not
   run. The interactive shell then performs its normal session snapshot, preserving
   transcript messages completed before the failure when saving succeeds.
+- A phase that ends without a final textual response fails instead of being recorded
+  as successfully completed.
+- Three malformed argument calls to the same tool stop the active phase. Each
+  rejected call receives a matching error result and is never executed.
 - A resumed session retains completed step messages, but version one does not
   automatically resume a partially completed workflow.
 - Review uses HAL's existing review phase, which may fix valid in-scope findings and

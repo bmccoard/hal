@@ -36,6 +36,10 @@ class MaxTurnsError(AgentError):
     pass
 
 
+class RepeatedMalformedToolCallError(AgentError):
+    pass
+
+
 class EventKind(str, Enum):
     ASSISTANT_TEXT = "assistant_text"
     ASSISTANT_COMMENTARY = "assistant_commentary"
@@ -94,19 +98,21 @@ class Agent:
         self._send_started = 0.0
 
     def send(self, text: str, display_text: str = "",
-             cancellation: CancellationToken | None = None) -> str:
+             cancellation: CancellationToken | None = None,
+             allowed_tools: set[str] | None = None) -> str:
         if not text.strip():
             raise AgentError("message is empty")
         cancellation = cancellation_or_default(cancellation)
         self._send_started = time.monotonic()
         self.messages.append(Message("user", [ContentBlock("text", text=text)], display_text=display_text))
         final_parts: list[str] = []
+        malformed_counts: dict[str, int] = {}
         for _ in range(self.max_turns):
             try:
                 cancellation.raise_if_cancelled()
                 request = Request(
                     model=self.model, system=self.system, messages=list(self.messages),
-                    tools=self.tools.specs,
+                    tools=self.tools.specs_for(allowed_tools),
                 )
                 stream = getattr(self.provider, "stream", None)
                 streamed = callable(stream) and getattr(self.provider, "streaming_enabled", True)
@@ -169,6 +175,7 @@ class Agent:
             # neither side is committed and the stored transcript stays valid.
             results: list[ContentBlock] = []
             cancelled: CancelledError | None = None
+            repeated_malformed: RepeatedMalformedToolCallError | None = None
             for call in calls:
                 self._emit(Event(
                     EventKind.TOOL_CALL, name=call.name, args=dict(call.input),
@@ -178,10 +185,25 @@ class Agent:
                 error = cancelled is not None
                 if cancelled is not None:
                     output = "skipped because the agent turn was cancelled"
+                elif call.argument_error:
+                    error = True
+                    malformed_counts[call.name] = malformed_counts.get(call.name, 0) + 1
+                    output = call.argument_error
+                    if malformed_counts[call.name] >= 3:
+                        output += (
+                            " HAL stopped this turn after three malformed calls to "
+                            f"{call.name!r}; use a different available tool or finish "
+                            "the response without that tool."
+                        )
+                        repeated_malformed = RepeatedMalformedToolCallError(
+                            f"repeated malformed arguments for tool {call.name!r}", partial,
+                        )
                 else:
                     try:
                         cancellation.raise_if_cancelled()
-                        output = self.tools.run(call.name, call.input, cancellation)
+                        output = self.tools.run(
+                            call.name, call.input, cancellation, allowed_tools,
+                        )
                     except CancelledError as exc:
                         cancelled = exc
                         error = True
@@ -201,6 +223,8 @@ class Agent:
             if cancelled is not None:
                 self._emit(Event(EventKind.ERROR, text=str(cancelled), error=cancelled))
                 raise cancelled
+            if repeated_malformed is not None:
+                self._fail(repeated_malformed)
         partial = "\n".join(final_parts).strip()
         error = MaxTurnsError(
             f"agent exceeded maximum of {self.max_turns} provider turns", partial

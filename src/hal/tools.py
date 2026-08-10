@@ -19,6 +19,10 @@ from .models import ToolSpec
 from .process import BoundedOutput, DEFAULT_OUTPUT_LIMIT, ProcessTimeout, run_bounded_process
 
 MAX_RESULT = DEFAULT_OUTPUT_LIMIT
+DEFAULT_IGNORED_DIRECTORIES = {
+    ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv",
+    "__pycache__", "node_modules", "venv",
+}
 
 
 def bound_output(text: str, limit: int = MAX_RESULT) -> str:
@@ -146,8 +150,8 @@ class ReadFileTool(Tool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("read_file", "Read a UTF-8 text file, optionally by 1-indexed line window.", {
-            "type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer"}, "limit": {"type": "integer"}}, "required": ["path"]
+        return ToolSpec("read_file", "Read a UTF-8 text file. offset is a positive 1-indexed line number; omit it to start at line 1.", {
+            "type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1}}, "required": ["path"]
         })
 
     def run(self, arguments: dict[str, Any],
@@ -176,7 +180,7 @@ class ReadFileTool(Tool):
         raw_limit = arguments.get("limit")
         limit = int(raw_limit) if raw_limit is not None else None
         if offset <= 0:
-            raise ValueError("offset must be a positive 1-indexed line number")
+            raise ValueError("offset must be a positive 1-indexed line number; retry with offset=1 or omit offset")
         if limit is not None and limit <= 0:
             raise ValueError("limit must be positive")
 
@@ -218,7 +222,10 @@ class ReadFileTool(Tool):
         logical_lines = line_number + int(last_line_ended_newline)
         empty_file_at_first_line = logical_lines == 0 and offset == 1
         if selected_lines == 0 and offset > logical_lines and not empty_file_at_first_line:
-            raise ValueError(f"read_file: offset {offset} is past end of file")
+            raise ValueError(
+                f"read_file: offset {offset} is past end of file "
+                f"({logical_lines} logical lines); retry with an offset from 1 to {max(logical_lines, 1)}"
+            )
         return b"".join(selected).decode("utf-8", "replace")
 
 
@@ -293,13 +300,27 @@ class GlobTool(_RootedTool):
         if not pattern:
             raise ValueError("pattern is required")
         matches: list[str] = []
-        for path in self.root.rglob("*"):
+        stopped = False
+        for directory, names, files in os.walk(self.root):
             cancellation.raise_if_cancelled()
-            if len(matches) >= 200:
+            names[:] = sorted(
+                name for name in names
+                if name not in DEFAULT_IGNORED_DIRECTORIES
+            )
+            base = Path(directory)
+            for filename in sorted(files):
+                cancellation.raise_if_cancelled()
+                path = base / filename
+                rel = path.relative_to(self.root).as_posix()
+                if self._within_root(path) and (
+                    fnmatch.fnmatch(rel, pattern) or Path(rel).match(pattern)
+                ):
+                    matches.append(rel)
+                    if len(matches) >= 200:
+                        stopped = True
+                        break
+            if stopped:
                 break
-            rel = path.relative_to(self.root).as_posix()
-            if path.is_file() and self._within_root(path) and (fnmatch.fnmatch(rel, pattern) or Path(rel).match(pattern)):
-                matches.append(rel)
         return json.dumps({"matches": sorted(matches), "truncated": len(matches) >= 200})
 
 
@@ -308,18 +329,22 @@ class GrepTool(_RootedTool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("grep", "Search text files under the workspace with a regular expression.", {
-            "type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}}, "required": ["pattern"]
+        return ToolSpec("grep", "Search text files under the workspace. pattern is a Python regular expression unless literal=true.", {
+            "type": "object", "properties": {"pattern": {"type": "string"}, "path": {"type": "string"}, "include": {"type": "string"}, "literal": {"type": "boolean", "default": False}}, "required": ["pattern"]
         })
 
     def run(self, arguments: dict[str, Any],
             cancellation: CancellationToken | None = None) -> str:
         cancellation = cancellation_or_default(cancellation)
         cancellation.raise_if_cancelled()
+        pattern = str(arguments.get("pattern", ""))
         try:
-            regex = re.compile(str(arguments.get("pattern", "")))
+            regex = re.compile(re.escape(pattern) if arguments.get("literal") is True else pattern)
         except re.error as exc:
-            raise ValueError(f"invalid regular expression: {exc}") from exc
+            raise ValueError(
+                f"invalid regular expression: {exc}; retry with literal=true "
+                "for exact text or escape regex metacharacters"
+            ) from exc
         base = (self.root / str(arguments.get("path", "."))).resolve()
         if not self._within_root(base):
             raise ValueError("search path escapes workspace root")
@@ -368,14 +393,34 @@ class Registry:
     def specs(self) -> list[ToolSpec]:
         return [self._tools[name].spec for name in sorted(self._tools)]
 
+    def specs_for(self, allowed: set[str] | None = None) -> list[ToolSpec]:
+        """Return all specs, or only explicitly allowed specs for a scoped turn."""
+        if allowed is None:
+            return self.specs
+        return [
+            self._tools[name].spec for name in sorted(self._tools)
+            if name in allowed
+        ]
+
     def run(self, name: str, arguments: dict[str, Any],
-            cancellation: CancellationToken | None = None) -> str:
+            cancellation: CancellationToken | None = None,
+            allowed: set[str] | None = None) -> str:
         cancellation = cancellation_or_default(cancellation)
         cancellation.raise_if_cancelled()
+        if allowed is not None and name not in allowed:
+            available = ", ".join(sorted(allowed)) or "none"
+            raise PermissionError(
+                f"tool {name!r} is not available in this workflow phase; "
+                f"available tools: {available}"
+            )
         try:
             tool = self._tools[name]
         except KeyError as exc:
-            raise ValueError(f"unknown tool: {name}") from exc
+            available = ", ".join(sorted(self._tools))
+            hint = "; use grep to search file contents" if name == "search" else ""
+            raise ValueError(
+                f"unknown tool: {name}{hint}; available tools: {available}"
+            ) from exc
         target = str(arguments.get("command", "")) if name == "bash" else name
         needs_approval = any(target == rule or (name == "bash" and target.startswith(rule) and (len(target) == len(rule) or target[len(rule)].isspace())) for rule in self.approvals)
         if needs_approval and (self.confirm is None or not self.confirm(f"Allow {name}: {target}?")):

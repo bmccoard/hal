@@ -31,6 +31,36 @@ class BufferedStreamResponse(ProviderError):
         self.data = data
 
 
+def _tool_call_block(call_id: str, name: str, raw_arguments: object) -> ContentBlock:
+    """Decode tool arguments without aborting an otherwise valid model turn.
+
+    Invalid arguments are never executed. The agent converts ``argument_error``
+    into a matching tool result so the model can correct its call on the next turn.
+    """
+    if isinstance(raw_arguments, dict):
+        return ContentBlock("tool_use", id=call_id, name=name, input=raw_arguments)
+    raw = raw_arguments if isinstance(raw_arguments, str) else json.dumps(raw_arguments)
+    try:
+        arguments = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError) as exc:
+        return ContentBlock(
+            "tool_use", id=call_id, name=name,
+            argument_error=(
+                f"{name or 'tool'} was not executed: invalid JSON arguments ({exc}). "
+                "Retry using one JSON object that exactly matches the tool schema."
+            ),
+        )
+    if not isinstance(arguments, dict):
+        return ContentBlock(
+            "tool_use", id=call_id, name=name,
+            argument_error=(
+                f"{name or 'tool'} was not executed: tool arguments must be a JSON object. "
+                "Retry using one JSON object that exactly matches the tool schema."
+            ),
+        )
+    return ContentBlock("tool_use", id=call_id, name=name, input=arguments)
+
+
 class Provider(ABC):
     name: str
     streaming_enabled = True
@@ -297,10 +327,10 @@ class AnthropicProvider(HTTPProvider):
         for index, parts in argument_parts.items():
             if not parts:
                 continue
-            try:
-                blocks[index].input = json.loads("".join(parts))
-            except json.JSONDecodeError as exc:
-                raise ProviderError(f"anthropic: invalid tool arguments for {blocks[index].name}: {exc}") from exc
+            previous = blocks[index]
+            blocks[index] = _tool_call_block(
+                previous.id, previous.name, "".join(parts),
+            )
         content = [blocks[index] for index in sorted(blocks)]
         if any(block.type == "tool_use" for block in content):
             stop_reason = "tool_use"
@@ -425,11 +455,9 @@ class OpenAIProvider(HTTPProvider):
             return _openai_response(terminal)
         blocks = [ContentBlock("text", text="".join(text_parts))] if text_parts else []
         for call in calls.values():
-            try:
-                arguments = json.loads(call["arguments"] or "{}")
-            except json.JSONDecodeError as exc:
-                raise ProviderError(f"openai: invalid tool arguments for {call['name']}: {exc}") from exc
-            blocks.append(ContentBlock("tool_use", id=call["id"], name=call["name"], input=arguments))
+            blocks.append(_tool_call_block(
+                call["id"], call["name"], call["arguments"],
+            ))
         return Response(blocks, "tool_use" if calls else "end_turn")
 
 
@@ -449,15 +477,9 @@ def _openai_response(data: dict[str, Any]) -> Response:
                 blocks.append(ContentBlock("text", text=text))
         elif item.get("type") == "function_call":
             saw_tool = True
-            try:
-                arguments = json.loads(item.get("arguments") or "{}")
-            except json.JSONDecodeError as exc:
-                raise ProviderError(
-                    f"openai: invalid tool arguments for {item.get('name')}: {exc}"
-                ) from exc
-            blocks.append(ContentBlock(
-                "tool_use", id=item.get("call_id", ""),
-                name=item.get("name", ""), input=arguments,
+            blocks.append(_tool_call_block(
+                item.get("call_id", ""), item.get("name", ""),
+                item.get("arguments") or "{}",
             ))
         elif item.get("type") == "reasoning":
             blocks.append(ContentBlock("raw", raw=item))
@@ -567,11 +589,9 @@ class OpenRouterProvider(HTTPProvider):
             return response
         blocks = [ContentBlock("text", text="".join(text_parts))] if text_parts else []
         for call in (calls[index] for index in sorted(calls)):
-            try:
-                arguments = json.loads(call["arguments"] or "{}")
-            except json.JSONDecodeError as exc:
-                raise ProviderError(f"{self.name}: invalid tool arguments for {call['name']}: {exc}") from exc
-            blocks.append(ContentBlock("tool_use", id=call["id"], name=call["name"], input=arguments))
+            blocks.append(_tool_call_block(
+                call["id"], call["name"], call["arguments"],
+            ))
         stop = "tool_use" if calls or finish_reason == "tool_calls" else (
             "max_tokens" if finish_reason == "length" else "end_turn"
         )
@@ -589,13 +609,9 @@ def _chat_response(name: str, data: dict[str, Any]) -> Response:
     blocks = [ContentBlock("text", text=message["content"])] if message.get("content") else []
     for call in message.get("tool_calls") or []:
         fn = call.get("function") or {}
-        try:
-            arguments = json.loads(fn.get("arguments") or "{}")
-        except json.JSONDecodeError as exc:
-            raise ProviderError(f"{name}: invalid tool arguments for {fn.get('name')}: {exc}") from exc
-        blocks.append(ContentBlock(
-            "tool_use", id=call.get("id", ""),
-            name=fn.get("name", ""), input=arguments,
+        blocks.append(_tool_call_block(
+            call.get("id", ""), fn.get("name", ""),
+            fn.get("arguments") or "{}",
         ))
     usage = data.get("usage") or {}
     return Response(

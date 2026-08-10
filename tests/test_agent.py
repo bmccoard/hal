@@ -8,6 +8,7 @@ from hal.agent import (
     Event,
     EventKind,
     MaxOutputTokensError,
+    RepeatedMalformedToolCallError,
     MaxTurnsError,
     UnexpectedStopReasonError,
 )
@@ -137,6 +138,60 @@ def test_unknown_failed_and_denied_calls_get_ordered_error_results() -> None:
     assert "unknown tool" in results[0].content
     assert "tool failed" in results[1].content
     assert "denied" in results[2].content
+
+
+def test_invalid_tool_arguments_are_returned_without_execution() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock(
+            "tool_use", id="call-1", name="noop", input={},
+            argument_error="noop was not executed: invalid JSON arguments",
+        )], "tool_use"),
+        Response([ContentBlock("text", text="Recovered.")], "end_turn"),
+    ])
+    tool = NoopTool()
+    tool.run = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("malformed call must not execute")
+    )
+    agent = Agent(provider, "model", "system", Registry([tool]))
+
+    assert agent.send("start") == "Recovered."
+    result = agent.messages[2].content[0]
+    assert result.tool_use_id == "call-1"
+    assert result.is_error is True
+    assert "was not executed" in result.content
+
+
+def test_three_malformed_calls_stop_turn_with_valid_transcript() -> None:
+    malformed = lambda index: Response([ContentBlock(
+        "tool_use", id=f"call-{index}", name="noop",
+        argument_error="noop was not executed: invalid JSON arguments",
+    )], "tool_use")
+    provider = ScriptedProvider([malformed(1), malformed(2), malformed(3)])
+    agent = Agent(provider, "model", "system", Registry([NoopTool()]))
+
+    with pytest.raises(RepeatedMalformedToolCallError, match="tool 'noop'"):
+        agent.send("start")
+
+    assert len(provider.requests) == 3
+    assert len(agent.messages) == 7
+    assert agent.messages[-1].content[0].is_error is True
+    assert "stopped this turn after three malformed calls" in agent.messages[-1].content[0].content
+
+
+def test_allowed_tools_limit_schema_and_execution() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock(
+            "tool_use", id="call-1", name="noop", input={},
+        )], "tool_use"),
+        Response([ContentBlock("text", text="Done.")], "end_turn"),
+    ])
+    agent = Agent(provider, "model", "system", Registry([NoopTool()]))
+
+    assert agent.send("start", allowed_tools=set()) == "Done."
+    assert provider.requests[0].tools == []
+    result = agent.messages[2].content[0]
+    assert result.is_error is True
+    assert "not available in this workflow phase" in result.content
 
 
 def test_unknown_stop_reason_keeps_safe_text_and_does_not_run_tool(tmp_path: Path) -> None:

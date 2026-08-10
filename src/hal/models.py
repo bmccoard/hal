@@ -23,6 +23,7 @@ class ContentBlock:
     id: str = ""
     name: str = ""
     input: dict[str, Any] = field(default_factory=dict)
+    argument_error: str = ""
     tool_use_id: str = ""
     content: str = ""
     is_error: bool = False

@@ -24,6 +24,8 @@ WORKFLOWS = {
     ),
 }
 
+_READ_ONLY_TOOLS = {"glob", "grep", "read_file", "git_status", "git_diff", "git_log"}
+
 
 def parse_workflow_command(text: str) -> tuple[Workflow, str] | None:
     """Parse ``/workflow NAME REQUEST`` or return ``None`` for other input."""
@@ -63,11 +65,20 @@ def run_workflow(
         phase = phases[name]
         prompt = (
             f"[workflow: {workflow.name}; step {index}/{total}; named phase: {name}]\n"
-            f"{phase.prompt}\n\nOriginal workflow request:\n{request}"
+            f"{phase.prompt}\n\n"
+            "Treat changes that existed before this workflow as user-owned work. "
+            "Do not claim them as changes made during this workflow.\n\n"
+            f"Original workflow request:\n{request}"
         )
-        results.append(agent.send(
+        result = agent.send(
             prompt,
             f"/workflow {workflow.name} [{name}] {request}",
             cancellation,
-        ))
+            allowed_tools=_READ_ONLY_TOOLS if name in {"design", "plan"} else None,
+        )
+        if not result.strip():
+            raise RuntimeError(
+                f"workflow {workflow.name!r} step {name!r} ended without a final response"
+            )
+        results.append(result)
     return results

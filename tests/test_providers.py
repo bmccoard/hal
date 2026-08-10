@@ -144,6 +144,47 @@ def test_chat_completions_normalizes_tool_calls(monkeypatch) -> None:
     assert response.content[0].name == "read_file"
 
 
+def test_chat_completions_preserves_valid_arguments_unchanged(monkeypatch) -> None:
+    provider = OpenRouterProvider("placeholder")
+    arguments = {"command": "printf ok", "timeout": 3}
+    monkeypatch.setattr(provider, "_post", lambda *_args: {
+        "choices": [{
+            "message": {"tool_calls": [{
+                "id": "call-1", "type": "function",
+                "function": {"name": "bash", "arguments": json.dumps(arguments)},
+            }]},
+            "finish_reason": "tool_calls",
+        }],
+        "usage": {},
+    })
+
+    response = provider.complete(_request())
+
+    assert response.content[0].input == arguments
+    assert response.content[0].argument_error == ""
+
+
+def test_chat_completions_returns_malformed_arguments_for_safe_retry(monkeypatch) -> None:
+    provider = OpenRouterProvider("placeholder")
+    monkeypatch.setattr(provider, "_post", lambda *_args: {
+        "choices": [{
+            "message": {"tool_calls": [{
+                "id": "call-1", "type": "function",
+                "function": {"name": "bash", "arguments": '{"command": "git'},
+            }]},
+            "finish_reason": "tool_calls",
+        }],
+        "usage": {},
+    })
+
+    response = provider.complete(_request())
+
+    call = response.content[0]
+    assert call.type == "tool_use"
+    assert call.input == {}
+    assert "was not executed: invalid JSON arguments" in call.argument_error
+
+
 def test_retry_after_wait_respects_cancellation_deadline(monkeypatch) -> None:
     provider = OpenRouterProvider("placeholder")
     error = urllib.error.HTTPError(
@@ -196,6 +237,22 @@ def test_chat_completions_streams_text_tool_arguments_and_usage(monkeypatch) -> 
     assert response.usage.input_tokens == 10
     assert captured["payload"]["stream"] is True
     assert captured["payload"]["max_completion_tokens"] == 8192
+
+
+def test_chat_stream_returns_malformed_arguments_for_safe_retry(monkeypatch) -> None:
+    provider = OpenRouterProvider("placeholder")
+
+    def events(*_args, **_kwargs):
+        yield {"choices": [{"delta": {"tool_calls": [{
+            "index": 0, "id": "call-1",
+            "function": {"name": "bash", "arguments": '{"command":'},
+        }]}, "finish_reason": "tool_calls"}]}
+
+    monkeypatch.setattr(provider, "_iter_sse", events)
+    response = provider.stream(_request(), lambda _delta: None)
+
+    assert response.stop_reason == "tool_use"
+    assert "was not executed" in response.content[0].argument_error
 
 
 def test_chat_stream_rejection_falls_back_to_buffered_completion(monkeypatch) -> None:
