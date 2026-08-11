@@ -40,7 +40,8 @@ HAL loads the first file that exists: `./hal.yaml`, then
 `~/.hal/config.yaml`, then the legacy `./neo.yaml` and `~/.neo/config.yaml`
 locations, then built-in defaults. Files are not merged. Copy
 [`hal.yaml.example`](hal.yaml.example) to `hal.yaml`, keep secrets in `.env`,
-and commit `hal.yaml` only when it contains shareable configuration.
+keep machine-specific overrides in ignored `*.local.yaml` files, and commit
+`hal.yaml` only when it contains shareable configuration.
 
 ```yaml
 provider: anthropic
