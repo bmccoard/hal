@@ -218,10 +218,7 @@ class NativeGitBackend:
         current = self.status(cancellation)
         outside = sorted(set(current.staged) - set(paths))
         if outside:
-            raise GitError(
-                "refusing to include already-staged paths outside this commit: "
-                + ", ".join(outside)
-            )
+            self.unstage(outside, cancellation)
         self._run(["add", "--", *paths], cancellation)
         staged = self.status(cancellation).staged
         if not staged:
@@ -376,10 +373,7 @@ class DulwichGitBackend:
         current = self.status(cancellation)
         outside = sorted(set(current.staged) - set(paths))
         if outside:
-            raise GitError(
-                "refusing to include already-staged paths outside this commit: "
-                + ", ".join(outside)
-            )
+            self.unstage(outside, cancellation)
         porcelain.add(self.root, paths=paths)
         cancellation.raise_if_cancelled()
         staged = self.status(cancellation).staged

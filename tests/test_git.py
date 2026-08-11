@@ -195,15 +195,18 @@ def test_native_git_refuses_truncated_path_output(monkeypatch, tmp_path: Path) -
         backend._names(["status"], None)
 
 
-def test_commit_refuses_unrelated_staged_paths(tmp_path: Path) -> None:
+def test_commit_unstages_unrelated_staged_paths(tmp_path: Path) -> None:
     root = new_repo(tmp_path)
     backend = DulwichGitBackend(root)
     (root / "intended.txt").write_text("wanted", encoding="utf-8")
     (root / "unrelated.txt").write_text("leave me staged", encoding="utf-8")
     porcelain.add(root, paths=["unrelated.txt"])
 
-    with pytest.raises(GitError, match="already-staged"):
-        backend.commit("Only intended", ["intended.txt"])
+    commit_id = backend.commit("Only intended", ["intended.txt"])
+    assert commit_id
+    after = backend.status()
+    assert "unrelated.txt" not in after.staged
+    assert "unrelated.txt" in after.unstaged or "unrelated.txt" in after.untracked
 
 
 def test_commit_tool_is_local_only_and_push_is_explicit(tmp_path: Path) -> None:
