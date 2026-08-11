@@ -260,9 +260,6 @@ def load_config(cwd: Path | None = None, home: Path | None = None) -> Config:
     load_dotenv(cwd / ".env")
     candidates = (
         cwd / "hal.yaml", home / ".hal" / "config.yaml",
-        # Read-only migration compatibility for installations created before
-        # the HAL rename. New examples and state always use HAL paths.
-        cwd / "neo.yaml", home / ".neo" / "config.yaml",
     )
     for path in candidates:
         if path.is_file():

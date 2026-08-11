@@ -8,7 +8,7 @@
 | Current milestone | Phase 1 core safety, with the first Phase 4 TUI slice underway |
 | Next work | Bring grep/glob schemas and behavior to parity; continue TUI polish |
 
-Audit basis: compared HAL with the upstream Go Neo tree and its developer docs on
+Audit basis: compared HAL with the upstream Go reference implementation and its developer docs on
 2026-08-06. The Python port has the basic provider-neutral loop, four API-key
 providers, native Windows/Unix shell selection, coding tools, configuration,
 AGENTS.md, skills, named phases, headless mode, and resumable sessions. The work
@@ -23,7 +23,7 @@ tests, or documentation recorded in the implementation log.
 - [ ] Preserve Python-specific improvements: Windows PowerShell support, custom
   OpenAI-compatible provider profiles, `.env` loading, and editable/package installs.
 - [ ] Add characterization tests before changing transcript, provider, session,
-  tool, or CLI behavior. Keep HAL files and legacy Neo sessions/configuration compatible.
+  tool, or CLI behavior.
 - [ ] Implement each phase with focused tests, full `pytest`, documentation updates,
   and a manual Windows smoke test. Add Linux and macOS CI once CI exists.
 - [ ] Maintain a checked feature-parity matrix linking each Go capability to its
@@ -227,7 +227,7 @@ tests, or documentation recorded in the implementation log.
 | 2026-08-07 | Propagate cooperative cancellation and deadlines through the core loop, provider I/O/retries, tools, and headless mode; preserve cancelled tool transcripts and terminate shell process trees | `src/hal/cancellation.py`, `src/hal/agent.py`, `src/hal/providers.py`, `src/hal/tools.py`, `src/hal/cli.py`, `tests/test_agent.py`, `tests/test_providers.py`, `tests/test_tools.py`, `tests/test_cli.py`, `README.md` | Full suite: 49 passed; compileall and Windows help/version/shell-cancellation smoke passed |
 | 2026-08-07 | Convert interactive SIGINT into active-turn cancellation, restore idle Ctrl-C behavior, save valid cancelled transcripts, and retain live state after save failures | `src/hal/cancellation.py`, `src/hal/cli.py`, `tests/test_cli.py`, `README.md` | Full suite: 51 passed; compileall and Windows help/version smoke passed |
 | 2026-08-07 | Add safe structured Git tools with native/Dulwich backends, automatic no-binary fallback, local-only check-ins, explicit pushes, doctor integration, configuration, and packaging | `src/hal/git.py`, `src/hal/git_tools.py`, `src/hal/tools.py`, `src/hal/config.py`, `src/hal/context.py`, `src/hal/cli.py`, `tests/test_git.py`, `tests/test_config.py`, `tests/test_context.py`, `tests/test_cli.py`, `tests/test_tools.py`, `pyproject.toml`, `README.md`, `hal.yaml.example`, `docs/designs/git-integration.md` | Full suite: 66 passed; compileall, pip check, wheel build, native doctor, native/Dulwich commits, and Dulwich local-remote push passed on Windows |
-| 2026-08-07 | Rename the installed product, terminal command, Python namespace, configuration/state paths, skill paths, tests, and documentation to HAL while retaining legacy Neo read compatibility and leaving the repository name unchanged | `src/hal/`, `.hal/`, `tests/`, `pyproject.toml`, `README.md`, `hal.yaml.example`, `.gitignore`, `AGENTS.md.example`, `docs/` | Full suite: 71 passed; compileall, pip check, editable reinstall, `hal` help/version/doctor, launcher replacement, and wheel namespace inspection passed on Windows |
+| 2026-08-07 | Rename the installed product, terminal command, Python namespace, configuration/state paths, skill paths, tests, and documentation to HAL while leaving the repository name unchanged | `src/hal/`, `.hal/`, `tests/`, `pyproject.toml`, `README.md`, `hal.yaml.example`, `.gitignore`, `AGENTS.md.example`, `docs/` | Full suite: 71 passed; compileall, pip check, editable reinstall, `hal` help/version/doctor, launcher replacement, and wheel namespace inspection passed on Windows |
 | 2026-08-07 | Add compact and verbose session listings, stable short selectors, active-session identification, and in-process interactive resume | `src/hal/sessions.py`, `src/hal/cli.py`, `tests/test_sessions.py`, `tests/test_cli.py`, `README.md` | Full suite: 75 passed; compact and verbose listing smoke tests passed on Windows |
 | 2026-08-07 | Add safe structured repository initialization on `main`, stage/unstage operations, automatic no-binary Dulwich selection, existing-repository refusal, sensitive staging/diff controls, and explicit guidance against Git installation, ad hoc Dulwich scripts, or credential rewriting | `src/hal/git.py`, `src/hal/git_tools.py`, `src/hal/context.py`, `tests/test_git.py`, `tests/test_tools.py`, `tests/test_context.py`, `README.md`, `docs/designs/git-integration.md` | Full suite: 80 passed; native and simulated no-Git Dulwich initialization, stage/unstage, initial commit, and sensitive-diff filtering passed on Windows |
 | 2026-08-07 | Add environment-backed custom provider endpoints through `api_base_env`, retain inline endpoint compatibility, and move private endpoint examples into `.env` | `src/hal/config.py`, `src/hal/providers.py`, `tests/test_config.py`, `tests/test_providers.py`, `README.md`, `hal.yaml.example` | Full suite: 82 passed; environment endpoint resolution, precedence, provider construction, and missing-variable diagnostics passed on Windows |

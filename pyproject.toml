@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "hal-agent-cli"
 version = "0.1.0"
-description = "HAL, a local provider-neutral coding-agent CLI based on Neo"
+description = "HAL, a local provider-neutral coding-agent CLI"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }

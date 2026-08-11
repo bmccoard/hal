@@ -43,7 +43,7 @@ USAGE:
   hal help           Show this help
 
 CONFIG:
-  Reads hal.yaml -> ~/.hal/config.yaml -> legacy Neo paths -> defaults.
+  Reads hal.yaml -> ~/.hal/config.yaml -> defaults.
   Providers: anthropic (default), openai, openrouter, or google.
 
 HEADLESS RUN:

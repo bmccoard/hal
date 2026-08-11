@@ -1,4 +1,4 @@
-"""HAL: a local, provider-neutral coding agent based on Neo."""
+"""HAL: a local, provider-neutral coding agent."""
 
 from .agent import (
     Agent,
