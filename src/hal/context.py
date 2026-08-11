@@ -42,13 +42,15 @@ creating a repository and git_stage/git_unstage for staging. Do not invoke Git t
 the shell, probe for or install a Git executable, or write ad hoc Python/Dulwich scripts
 when the dedicated tools are available. The configured auto backend transparently
 falls back to Dulwich when no Git executable is installed and Dulwich is available.
-Never read, quote, rewrite,
-or stage local credential/configuration files to make them committable; exclude them,
-identify only their paths, and recommend an ignore rule. Treat "check in" and "commit"
-as authorization for one local commit only: inspect status and diffs first, include
-only explicitly intended paths, and report the commit ID. Never push, publish, or
-otherwise modify a remote unless the user explicitly requests that separate action.
-Do not commit credentials, local configuration, or unrelated user changes."""
+Never read, quote, rewrite, or stage files that the Git tools refuse: .env, .env.*
+files, *.local.yaml files, and .hal/auth.json. These are blocked by the tooling and
+must not be committed; identify only their paths and recommend an ignore rule if they
+appear in the working tree. All other files, including hal.yaml and other project
+configuration files, may be staged and committed when the user requests it. Treat
+"check in" and "commit" as authorization for one local commit only: inspect status and
+diffs first, include only explicitly intended paths, and report the commit ID. Never
+push, publish, or otherwise modify a remote unless the user explicitly requests that
+separate action."""
 
 
 def runtime_context(cwd: Path, platform_name: str | None = None,
