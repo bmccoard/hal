@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import ctypes
 import json
+import os
 import threading
 import time
+from ctypes import wintypes
 from pathlib import Path
 from typing import Callable
 
@@ -26,6 +29,54 @@ from .sayings import startup_saying
 from .sessions import Session, SessionStore, short_session_id
 from .tools import BashTool
 from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
+
+
+def copy_windows_unicode(text: str) -> None:
+    """Copy arbitrary Unicode text with the native Windows clipboard API."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.EmptyClipboard.argtypes = []
+    user32.EmptyClipboard.restype = wintypes.BOOL
+    user32.SetClipboardData.argtypes = [wintypes.UINT, ctypes.c_void_p]
+    user32.SetClipboardData.restype = ctypes.c_void_p
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+    kernel32.GlobalAlloc.restype = ctypes.c_void_p
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    kernel32.GlobalFree.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalFree.restype = ctypes.c_void_p
+
+    encoded = (text + "\0").encode("utf-16-le")
+    if not user32.OpenClipboard(None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    memory = None
+    transferred = False
+    try:
+        if not user32.EmptyClipboard():
+            raise ctypes.WinError(ctypes.get_last_error())
+        memory = kernel32.GlobalAlloc(0x0002, len(encoded))  # GMEM_MOVEABLE
+        if not memory:
+            raise ctypes.WinError(ctypes.get_last_error())
+        destination = kernel32.GlobalLock(memory)
+        if not destination:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            ctypes.memmove(destination, encoded, len(encoded))
+        finally:
+            kernel32.GlobalUnlock(memory)
+        if not user32.SetClipboardData(13, memory):  # CF_UNICODETEXT
+            raise ctypes.WinError(ctypes.get_last_error())
+        transferred = True
+    finally:
+        if memory and not transferred:
+            kernel32.GlobalFree(memory)
+        user32.CloseClipboard()
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -59,6 +110,27 @@ class ConfirmScreen(ModalScreen[bool]):
         self.dismiss(False)
 
 
+class AssistantResponse(Vertical):
+    """An assistant Markdown response with its original text available to copy."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__(classes="assistant-response transcript-entry")
+        self.response_text = text
+        self.body = Static(self._panel(text), classes="response-content")
+
+    @staticmethod
+    def _panel(text: str) -> Panel:
+        return Panel(Markdown(text), title="HAL", border_style="green")
+
+    def compose(self) -> ComposeResult:
+        yield self.body
+        yield Button("Copy", classes="copy-response")
+
+    def update_response(self, text: str) -> None:
+        self.response_text = text
+        self.body.update(self._panel(text))
+
+
 class HalTui(App[int]):
     """Responsive terminal front end over HAL's synchronous agent core."""
 
@@ -69,6 +141,9 @@ class HalTui(App[int]):
     #status { height: 1; padding: 0 1; color: $text-muted; background: $boost; }
     #transcript { height: 1fr; padding: 1 2; scrollbar-gutter: stable; }
     .transcript-entry { height: auto; margin-bottom: 1; }
+    .assistant-response { height: auto; }
+    .response-content { height: auto; }
+    .copy-response { width: 8; min-width: 8; height: 1; min-height: 1; border: none; padding: 0 1; }
     #composer-frame { height: 9; border-top: solid $primary; padding: 0 1; }
     #composer { height: 6; border: none; background: $surface; }
     #composer-controls { height: 3; align-horizontal: right; }
@@ -117,7 +192,7 @@ class HalTui(App[int]):
         self.turn_started = 0.0
         self.tool_names: dict[str, str] = {}
         self.response_text = ""
-        self.response_widget: Static | None = None
+        self.response_widget: AssistantResponse | None = None
         self.commentary_text = ""
         self.commentary_widget: Static | None = None
         self.startup_saying = startup_saying()
@@ -159,11 +234,18 @@ class HalTui(App[int]):
         elif message.role == "assistant":
             for block in message.content:
                 if block.type == "text" and block.text:
-                    self._write(Panel(Markdown(block.text), title="HAL", border_style="green"))
+                    self._write_response(block.text)
 
     def _write(self, content: object) -> Static:
         transcript = self.query_one("#transcript", VerticalScroll)
         widget = Static(content, classes="transcript-entry")
+        transcript.mount(widget)
+        transcript.scroll_end(animate=False)
+        return widget
+
+    def _write_response(self, text: str) -> AssistantResponse:
+        transcript = self.query_one("#transcript", VerticalScroll)
+        widget = AssistantResponse(text)
         transcript.mount(widget)
         transcript.scroll_end(animate=False)
         return widget
@@ -206,6 +288,21 @@ class HalTui(App[int]):
             self.action_insert_newline()
         elif event.button.id == "cancel":
             self.action_cancel_turn()
+        elif event.button.has_class("copy-response"):
+            response = event.button.parent
+            if isinstance(response, AssistantResponse):
+                self._copy_response(response.response_text)
+
+    def _copy_response(self, text: str) -> None:
+        try:
+            if os.name == "nt":
+                copy_windows_unicode(text)
+            else:
+                self.copy_to_clipboard(text)
+        except OSError as exc:
+            self.notify(f"Could not copy response: {exc}", severity="error")
+            return
+        self.notify("Response Markdown copied to clipboard.")
 
     def action_submit(self) -> None:
         if isinstance(self.screen, ConfirmScreen):
@@ -385,11 +482,10 @@ class HalTui(App[int]):
         if event.kind == EventKind.ASSISTANT_TEXT and event.text:
             self._finish_commentary_card()
             self.response_text += event.text
-            panel = Panel(Markdown(self.response_text), title="HAL", border_style="green")
             if self.response_widget is None:
-                self.response_widget = self._write(panel)
+                self.response_widget = self._write_response(self.response_text)
             else:
-                self.response_widget.update(panel)
+                self.response_widget.update_response(self.response_text)
                 self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
         elif event.kind == EventKind.ASSISTANT_COMMENTARY and event.text:
             self.commentary_text += event.text

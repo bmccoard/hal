@@ -24,6 +24,7 @@ The first slice provides:
 - a multiline composer with portable terminal controls (`Enter` sends;
   `F3`, `Shift+Enter`, or the New line button inserts a newline; `F2` and
   `Ctrl+Enter` are additional send paths; Windows-reserved `Alt+Enter` is avoided);
+- copy buttons on assistant response cards that copy the original Markdown source;
 - concise tool receipts, with full calls/results when `output.verbose` is enabled;
 - project, Git branch, provider/model, session, and elapsed-work status;
 - `/help`, `/sessions`, `/resume`, `/clear`, `/model`, `/exit`, named phases, skills,

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 from pathlib import Path
 import threading
 from types import SimpleNamespace
 
 from textual.containers import VerticalScroll
+from textual.widgets import Button
 
 from hal.agent import Event, EventKind
 from hal.cancellation import CancellationToken
@@ -13,7 +15,7 @@ from hal.config import Config
 from hal.models import ContentBlock, Message, Usage
 from hal.sayings import HAL_SAYINGS
 from hal.sessions import Metadata, SessionStore
-from hal.tui import HalTui
+from hal.tui import AssistantResponse, HalTui
 
 
 class FakeAgent:
@@ -99,11 +101,74 @@ def test_tui_updates_one_response_card_for_multiple_stream_deltas(tmp_path: Path
             await pilot.pause()
             assert len(list(app.query(".transcript-entry"))) == initial + 1
             assert app.response_text == "Hello"
+            response = app.query_one(AssistantResponse)
+            assert response.response_text == "Hello"
+            assert response.query_one(".copy-response", Button).label.plain == "Copy"
             app._render_event(Event(EventKind.DONE))
             assert app.response_widget is None
             app.action_safe_quit()
 
     asyncio.run(scenario())
+
+
+def test_tui_copy_button_copies_raw_response_markdown(tmp_path: Path) -> None:
+    app, _agent, _store = _app(tmp_path)
+    copied: list[str] = []
+    markdown = "## Result\n\n- **answer:** `42`"
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            app._render_event(Event(EventKind.ASSISTANT_TEXT, text=markdown))
+            await pilot.pause()
+            app._copy_response = copied.append  # type: ignore[method-assign]
+            await pilot.click(".copy-response")
+            assert copied == [markdown]
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
+def test_windows_clipboard_accepts_unicode(monkeypatch) -> None:
+    from hal.tui import copy_windows_unicode
+
+    clipboard: dict[str, object] = {}
+
+    class Function:
+        def __init__(self, callback):
+            object.__setattr__(self, "callback", callback)
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+        def __setattr__(self, _name, _value):
+            pass
+
+    class User32:
+        OpenClipboard = Function(lambda _owner: 1)
+        EmptyClipboard = Function(lambda: 1)
+        SetClipboardData = Function(
+            lambda format_id, memory: clipboard.update(
+                format=format_id, memory=memory
+            ) or memory
+        )
+        CloseClipboard = Function(lambda: 1)
+
+    class Kernel32:
+        GlobalAlloc = Function(lambda _flags, size: ctypes.create_string_buffer(size))
+        GlobalLock = Function(lambda memory: ctypes.addressof(memory))
+        GlobalUnlock = Function(lambda _memory: 1)
+        GlobalFree = Function(lambda _memory: None)
+
+    libraries = iter([User32(), Kernel32()])
+    monkeypatch.setattr(
+        ctypes, "WinDLL", lambda *_args, **_kwargs: next(libraries), raising=False
+    )
+    copy_windows_unicode("step → done ✓")
+
+    assert clipboard["format"] == 13
+    memory = clipboard["memory"]
+    assert isinstance(memory, ctypes.Array)
+    assert memory.raw.decode("utf-16-le").rstrip("\0") == "step → done ✓"
 
 
 def test_tui_portable_submit_and_multiline_keys(tmp_path: Path) -> None:
