@@ -130,8 +130,8 @@ def load_skills(cwd: Path, home: Path | None = None) -> list[Skill]:
     home = home or Path.home()
     root = workspace_root(cwd)
     for parent in (
-        home / ".neo" / "skills", home / ".hal" / "skills",
-        root / ".neo" / "skills", root / ".hal" / "skills",
+        home / ".hal" / "skills",
+        root / ".hal" / "skills",
     ):
         if not parent.is_dir():
             continue
@@ -153,7 +153,7 @@ def load_skills(cwd: Path, home: Path | None = None) -> list[Skill]:
 def load_agents_files(cwd: Path, home: Path | None = None) -> list[tuple[Path, str]]:
     docs: list[tuple[Path, str]] = []
     home = home or Path.home()
-    for global_path in (home / ".neo" / "AGENTS.md", home / ".hal" / "AGENTS.md"):
+    for global_path in (home / ".hal" / "AGENTS.md",):
         if global_path.is_file() and (text := global_path.read_text(encoding="utf-8").strip()):
             docs.append((global_path, text))
     root = workspace_root(cwd).resolve()

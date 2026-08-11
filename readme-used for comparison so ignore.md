@@ -1,10 +1,9 @@
 # HAL CLI
 
-HAL is a Python coding-agent CLI based on the upstream Neo project at
-https://github.com/owainlewis/neo. Its name is inspired by HAL 9000 from
-*2001: A Space Odyssey*. HAL keeps the upstream provider-neutral agent loop,
-local-first configuration, built-in coding tools, project instructions, skills,
-named phases, headless mode, and resumable sessions.
+HAL is a Python coding-agent CLI inspired by HAL 9000 from *2001: A Space
+Odyssey*. It provides a provider-neutral agent loop, local-first
+configuration, built-in coding tools, project instructions, skills, named
+phases, headless mode, and resumable sessions.
 The interactive interface is a responsive Textual TUI inspired by the Go version's
 Bubble Tea experience, with a portable basic REPL retained as a fallback.
 
@@ -37,10 +36,10 @@ python -m hal --help
 ## Configure
 
 HAL loads the first file that exists: `./hal.yaml`, then
-`~/.hal/config.yaml`, then the legacy `./neo.yaml` and `~/.neo/config.yaml`
-locations, then built-in defaults. Files are not merged. Copy
-[`hal.yaml.example`](hal.yaml.example) to `hal.yaml`, which is ignored by Git
-and may contain local credentials. Never commit `hal.yaml`.
+`~/.hal/config.yaml`, then built-in defaults. Files are not merged. Copy
+[`hal.yaml.example`](hal.yaml.example) to `hal.yaml`, keep secrets in `.env`,
+keep machine-specific overrides in ignored `*.local.yaml` files, and commit
+`hal.yaml` only when it contains shareable configuration.
 
 ```yaml
 provider: anthropic
@@ -387,14 +386,11 @@ Dulwich and native Git diffs use the same bounded head/tail output policy.
 
 ### Skills
 
-Skills are reusable prompt instructions, not executable tools. HAL discovers HAL
-paths and then legacy Neo paths for migration compatibility:
+Skills are reusable prompt instructions, not executable tools. HAL discovers:
 
 ```text
 ~/.hal/skills/<name>/SKILL.md             user-global skills
 <workspace>/.hal/skills/<name>/SKILL.md  project skills
-~/.neo/skills/<name>/SKILL.md             legacy user-global skills
-<workspace>/.neo/skills/<name>/SKILL.md  legacy project skills
 ```
 
 A project skill overrides a global skill with the same name. Each `SKILL.md`
@@ -430,8 +426,7 @@ catalog but does not expand `/name` or `$name` invocations.
 ### Project instructions (`AGENTS.md`)
 
 `AGENTS.md` provides repository guidance that applies automatically; unlike a
-skill, the user does not invoke it. HAL loads legacy `~/.neo/AGENTS.md`, then
-`~/.hal/AGENTS.md`, then
+skill, the user does not invoke it. HAL loads `~/.hal/AGENTS.md`, then
 project `AGENTS.md` files from the workspace root down to the current directory,
 with more specific files appearing later in the prompt.
 
@@ -482,13 +477,6 @@ The package layout mirrors the Go architecture at a smaller scale:
 - `tools.py` owns executable local capabilities.
 - `config.py`, `context.py`, and `sessions.py` provide product features.
 - `cli.py` is the composition and process boundary.
-
-## Upstream Attribution
-
-HAL is based on the Neo coding-agent CLI:
-
-- Upstream project: https://github.com/owainlewis/neo
-- Upstream license: MIT
 
 ## License
 

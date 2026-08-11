@@ -18,7 +18,7 @@ def sensitive_git_paths(paths: list[str]) -> list[str]:
         if (
             name == ".env" or name.startswith(".env.")
             or name.endswith(".local.yaml")
-            or normalized in {".hal/auth.json", ".neo/auth.json"}
+            or normalized == ".hal/auth.json"
         ):
             sensitive.append(path)
     return sensitive

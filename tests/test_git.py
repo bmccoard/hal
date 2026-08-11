@@ -238,7 +238,7 @@ def test_git_paths_are_repository_relative_and_cannot_escape(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    "path", [".env", "hal.local.yaml", ".hal/auth.json", ".neo/auth.json"],
+    "path", [".env", "hal.local.yaml", ".hal/auth.json"],
 )
 def test_commit_tool_rejects_known_local_configuration(path: str, tmp_path: Path) -> None:
     root = new_repo(tmp_path)

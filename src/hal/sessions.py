@@ -36,12 +36,7 @@ class Session:
 
 class SessionStore:
     def __init__(self, directory: Path | None = None) -> None:
-        if directory is not None:
-            self.directory = directory
-            self.legacy_directory: Path | None = None
-        else:
-            self.directory = Path.home() / ".hal" / "sessions"
-            self.legacy_directory = Path.home() / ".neo" / "sessions"
+        self.directory = directory if directory is not None else Path.home() / ".hal" / "sessions"
 
     def create(self, metadata: Metadata) -> Session:
         now = _now(); metadata.id = metadata.id or f"sess_{secrets.token_hex(8)}"
@@ -94,13 +89,11 @@ class SessionStore:
 
     def list(self) -> list[Metadata]:
         by_id: dict[str, Metadata] = {}
-        directories = ([self.legacy_directory] if self.legacy_directory is not None else []) + [self.directory]
-        for directory in directories:
-            for item in self._read_index(directory).get("sessions", []):
-                metadata = Metadata(**{
-                    k: v for k, v in item.items() if k in Metadata.__dataclass_fields__
-                })
-                by_id[metadata.id] = metadata
+        for item in self._read_index(self.directory).get("sessions", []):
+            metadata = Metadata(**{
+                k: v for k, v in item.items() if k in Metadata.__dataclass_fields__
+            })
+            by_id[metadata.id] = metadata
         return sorted(by_id.values(), key=lambda x: x.updated_at, reverse=True)
 
     def search(self, query: str) -> list[tuple[Metadata, str]]:
@@ -124,13 +117,7 @@ class SessionStore:
 
     def _find_session_path(self, session_id: str) -> Path | None:
         path = self.directory / f"{session_id}.json"
-        if path.is_file():
-            return path
-        if self.legacy_directory is not None:
-            legacy_path = self.legacy_directory / f"{session_id}.json"
-            if legacy_path.is_file():
-                return legacy_path
-        return None
+        return path if path.is_file() else None
 
     @staticmethod
     def _atomic(path: Path, value: dict) -> None:
