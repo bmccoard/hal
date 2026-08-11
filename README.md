@@ -39,8 +39,8 @@ python -m hal --help
 HAL loads the first file that exists: `./hal.yaml`, then
 `~/.hal/config.yaml`, then the legacy `./neo.yaml` and `~/.neo/config.yaml`
 locations, then built-in defaults. Files are not merged. Copy
-[`hal.yaml.example`](hal.yaml.example) to `hal.yaml`, which is ignored by Git
-and may contain local credentials. Never commit `hal.yaml`.
+[`hal.yaml.example`](hal.yaml.example) to `hal.yaml`, keep secrets in `.env`,
+and commit `hal.yaml` only when it contains shareable configuration.
 
 ```yaml
 provider: anthropic

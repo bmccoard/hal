@@ -10,8 +10,9 @@ These instructions apply to all work in this repository.
 - Preserve compatibility with Python 3.11 and newer.
 - Prefer focused changes and avoid adding dependencies when the standard
   library is sufficient.
-- Never commit `hal.yaml`, API keys, credentials, private endpoints, or internal
-  model identifiers. Use fictional values in tracked examples and tests.
+- Never commit API keys, credentials, private endpoints, or internal model
+  identifiers. Keep secrets in `.env` and use fictional values in tracked
+  examples and tests.
 
 ## Verification
 

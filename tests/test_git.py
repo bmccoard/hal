@@ -121,24 +121,27 @@ def test_native_init_creates_main_when_available(tmp_path: Path) -> None:
     assert backend.status().branch == "main"
 
 
-def test_initialized_dulwich_repo_keeps_sensitive_commit_protection(tmp_path: Path) -> None:
+def test_initialized_dulwich_repo_allows_yaml_config_commit(tmp_path: Path) -> None:
     root = tmp_path / "repo"; root.mkdir()
     backend = DulwichGitBackend(root)
     GitInitTool(backend).run({})
-    (root / "neo.yaml").write_text("api_key: secret", encoding="utf-8")
+    (root / "hal.yaml").write_text("provider: openai\n", encoding="utf-8")
 
-    with pytest.raises(ValueError, match="credentials"):
-        GitCommitTool(backend).run({"message": "Initial commit", "paths": ["neo.yaml"]})
+    committed = json.loads(GitCommitTool(backend).run({
+        "message": "Initial commit", "paths": ["hal.yaml"],
+    }))
+
+    assert backend.log(1)[0].commit == committed["commit"]
 
 
 def test_stage_tool_rejects_sensitive_paths_and_unstage_preserves_files(tmp_path: Path) -> None:
     root = new_repo(tmp_path)
     backend = DulwichGitBackend(root)
     (root / "safe.txt").write_text("safe", encoding="utf-8")
-    (root / "neo.yaml").write_text("api_key: secret", encoding="utf-8")
+    (root / ".env").write_text("API_KEY=secret", encoding="utf-8")
 
     with pytest.raises(ValueError, match="refusing to stage"):
-        GitStageTool(backend).run({"paths": ["safe.txt", "neo.yaml"]})
+        GitStageTool(backend).run({"paths": ["safe.txt", ".env"]})
     GitStageTool(backend).run({"paths": ["safe.txt"]})
     assert backend.status().staged == ["safe.txt"]
     GitUnstageTool(backend).run({"paths": ["safe.txt"]})
@@ -151,16 +154,16 @@ def test_diff_tool_omits_sensitive_staged_content(tmp_path: Path) -> None:
     backend = DulwichGitBackend(root)
     (root / "safe.txt").write_text("public content", encoding="utf-8")
     secret = "sk-test-secret-that-must-not-reach-the-model"
-    (root / "neo.yaml").write_text(f"api_key: {secret}", encoding="utf-8")
-    porcelain.add(root, paths=["safe.txt", "neo.yaml"])
+    (root / ".env").write_text(f"API_KEY={secret}", encoding="utf-8")
+    porcelain.add(root, paths=["safe.txt", ".env"])
 
     output = GitDiffTool(backend).run({"staged": True})
 
     assert "public content" in output
     assert secret not in output
-    assert "omitted sensitive paths: neo.yaml" in output
+    assert "omitted sensitive paths: .env" in output
     with pytest.raises(ValueError, match="refusing to display a diff"):
-        GitDiffTool(backend).run({"staged": True, "paths": ["neo.yaml"]})
+        GitDiffTool(backend).run({"staged": True, "paths": [".env"]})
 
 
 def test_dulwich_diff_bounds_large_output_and_preserves_head_and_tail(tmp_path: Path) -> None:
@@ -235,7 +238,7 @@ def test_git_paths_are_repository_relative_and_cannot_escape(tmp_path: Path) -> 
 
 
 @pytest.mark.parametrize(
-    "path", [".env", "hal.yaml", ".hal/auth.json", "neo.yaml", ".neo/auth.json"],
+    "path", [".env", ".hal/auth.json", ".neo/auth.json"],
 )
 def test_commit_tool_rejects_known_local_configuration(path: str, tmp_path: Path) -> None:
     root = new_repo(tmp_path)
