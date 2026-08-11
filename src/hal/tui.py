@@ -144,11 +144,12 @@ class HalTui(App[int]):
     .assistant-response { height: auto; }
     .response-content { height: auto; }
     .copy-response { width: 8; min-width: 8; height: 1; min-height: 1; border: none; padding: 0 1; }
-    #composer-frame { height: 9; border-top: solid $primary; padding: 0 1; }
+    #composer-frame { height: 8; border-top: solid $primary; padding: 0 1; }
     #composer { height: 6; border: none; background: $surface; }
-    #composer-controls { height: 3; align-horizontal: right; }
+    #composer-controls { height: 1; align-horizontal: right; }
     #composer-hint { width: 1fr; content-align: left middle; color: $text-muted; }
-    #composer-controls Button { min-width: 10; margin-left: 1; }
+    #composer-controls Button { width: 10; min-width: 10; height: 1; min-height: 1; margin-left: 1; border: none; padding: 0 1; }
+    #composer-controls #newline { width: 12; min-width: 12; }
     """
 
     BINDINGS = [
@@ -204,8 +205,8 @@ class HalTui(App[int]):
         with Vertical(id="composer-frame"):
             yield TextArea(soft_wrap=True, placeholder="Ask HAL…", id="composer")
             with Horizontal(id="composer-controls"):
-                yield Static("Enter/F2 send · F3/Shift+Enter new line", id="composer-hint")
-                yield Button("New line", id="newline")
+                yield Static("Enter/F2 send · F3 new line", id="composer-hint")
+                yield Button("Newline", id="newline")
                 yield Button("Cancel", id="cancel", disabled=True)
                 yield Button("Send", id="send", variant="primary")
         yield Footer()

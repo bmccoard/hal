@@ -7,7 +7,7 @@ import threading
 from types import SimpleNamespace
 
 from textual.containers import VerticalScroll
-from textual.widgets import Button
+from textual.widgets import Button, Footer
 
 from hal.agent import Event, EventKind
 from hal.cancellation import CancellationToken
@@ -190,6 +190,28 @@ def test_tui_portable_submit_and_multiline_keys(tmp_path: Path) -> None:
                     break
             assert agent.prompts == [("send with enter", "")]
             app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
+def test_tui_composer_buttons_do_not_overlap_footer(tmp_path: Path) -> None:
+    app, _agent, _store = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)):
+            footer = app.query_one(Footer)
+            controls = app.query_one("#composer-controls")
+            buttons = [app.query_one(f"#{name}", Button) for name in ("newline", "cancel", "send")]
+
+            hint = str(app.query_one("#composer-hint").render())
+            assert hint == "Enter/F2 send · F3 new line"
+            assert "Shift+Enter" not in hint
+            assert app.query_one("#newline", Button).label.plain == "Newline"
+            assert app.query_one("#newline", Button).region.width == 12
+            assert controls.region.bottom <= footer.region.y
+            assert controls.region.height == 1
+            assert all(button.region.height == 1 for button in buttons)
+            assert all(button.region.bottom <= footer.region.y for button in buttons)
 
     asyncio.run(scenario())
 
