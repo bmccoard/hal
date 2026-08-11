@@ -4,6 +4,7 @@ HAL is a Python coding-agent CLI inspired by HAL 9000 from *2001: A Space
 Odyssey*. It provides a provider-neutral agent loop, local-first
 configuration, built-in coding tools, project instructions, skills, named
 phases, headless mode, and resumable sessions.
+
 The interactive interface is a responsive Textual TUI inspired by the Go version's
 Bubble Tea experience, with a portable basic REPL retained as a fallback.
 
