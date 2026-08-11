@@ -1,0 +1,77 @@
+# Copy to hal.yaml and adjust for your provider/model. Keep credentials in the
+# ignored .env file when possible so routine config inspection cannot display them.
+
+provider: openrouter
+model: openai/gpt-4o-mini
+
+extensions:
+  - simple
+
+extension_config:
+  simple:
+    greeting: Hello
+
+
+# Git operations prefer the installed git executable and fall back to the
+# required Dulwich Python backend. Set this to native or dulwich to require
+# one backend explicitly.
+git:
+  backend: auto
+  # backend: dulwich
+
+# Restrict built-in write_file/edit_file calls to the Git workspace. Outside
+# paths require interactive approval and are denied in headless mode. Shell and
+# extension code cannot be path-confined by this setting; control model-issued
+# shell access independently with bash_policy: normal, approve, or deny.
+only_write_locally: true
+bash_policy: normal
+
+# Optional interactive confirmations. These are user-interface friction, not a
+# security boundary, and literal prefixes do not detect every indirect command.
+# tool_approvals:
+#   - pip
+#   - python -m pip
+#   - py -m pip
+#   - write_file
+#   - edit_file
+#   - git_commit
+#   - git_push
+
+# Reserved configuration: parsed and validated, but transcript compaction is
+# not implemented in the Python port yet. This currently has no runtime effect.
+compaction:
+  context_window_tokens: 200000
+
+features:
+  agents_file: true     # Active: load applicable AGENTS.md instructions.
+  skills: true          # Active: discover and expand HAL skills.
+  # Active: incrementally display interactive responses. Set false for an
+  # enterprise gateway that requires buffered Chat Completions. `hal run`
+  # remains buffered regardless of this setting.
+  streaming: true
+  # Reserved: parsed, but provider prompt caching is not implemented yet.
+  prompt_caching: true
+
+# Installed tool extensions are never loaded unless explicitly enabled here.
+# extensions:
+#   - jellyfin
+# extension_config:
+#   jellyfin:
+#     url: http://localhost:8096
+
+# Active in the TUI: concise tool receipts are the default; verbose mode shows
+# complete call/result cards. The basic REPL retains its compact fixed view.
+output:
+  verbose: false
+
+# Optional named profile example:
+# provider: enterprise
+# providers:
+#   - id: enterprise
+#     name: Example Enterprise GPT
+#     provider: openai
+#     model: example.organization.language-model.gpt-5
+#     api_base_env: ENTERPRISE_LLM_BASE_URL
+#     api_key_env: ENTERPRISE_LLM_TOKEN
+#     protocol: chat_completions
+#     max_tokens_parameter: max_completion_tokens

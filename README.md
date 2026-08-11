@@ -316,6 +316,15 @@ be unique across HAL and all enabled extensions; HAL stops with a configuration 
 instead of silently replacing a tool. Extensions can add tools through the public
 `Registry.extend()` method when constructing registries in application code.
 
+To start a new sibling extension project from the included working example, run:
+
+```bash
+python new-project.py my-extension
+```
+
+This copies `example/simple` to `../my-extension`, specializes its distribution,
+entry-point, package, and tool names, and refuses to overwrite an existing path.
+
 The tool retains the provider-facing name `bash` for compatibility, but selects
 the native shell explicitly. On Windows it uses `pwsh`, then Windows PowerShell,
 and falls back to `cmd.exe` only when neither is available. On Unix-like systems
