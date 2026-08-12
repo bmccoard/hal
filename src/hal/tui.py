@@ -3,16 +3,18 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import re
 import threading
 import time
 from ctypes import wintypes
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
 from rich.markdown import Markdown
 from rich.panel import Panel
 from rich.text import Text
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -29,6 +31,71 @@ from .sayings import startup_saying
 from .sessions import Session, SessionStore, short_session_id
 from .tools import BashTool
 from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
+
+
+_COLLAPSED_PASTE_CHARS = 8_192
+
+
+class Composer(TextArea):
+    """Text area that keeps large pasted payloads out of the render document."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self._pasted_blocks: dict[str, str] = {}
+        self._paste_number = 0
+
+    async def _on_paste(self, event: events.Paste) -> None:
+        if self.read_only:
+            return
+        event.stop()
+        event.prevent_default()
+        self._insert_paste(event.text)
+
+    def action_paste(self) -> None:
+        """Apply the same collapsing behavior to Textual's local clipboard."""
+        if not self.read_only:
+            self._insert_paste(self.app.clipboard)
+
+    def _insert_paste(self, text: str) -> None:
+        """Insert a small paste or a compact marker for a large payload."""
+        if len(text) < _COLLAPSED_PASTE_CHARS:
+            start, end = self.selection
+            result = self.replace(text, start, end, maintain_selection_offset=False)
+            self.move_cursor(result.end_location)
+            self.focus()
+            return
+        self._paste_number += 1
+        size = len(text.encode("utf-8"))
+        marker = f"[Pasted block {self._paste_number} · {size:,} bytes]"
+        # A single replacement keeps selection/cursor behavior and avoids an
+        # expensive render/document update for every pasted character.
+        start, end = self.selection
+        result = self.replace(marker, start, end, maintain_selection_offset=False)
+        self.move_cursor(result.end_location)
+        self.focus()
+        self._pasted_blocks[marker] = text
+        self.post_message(self.LargePaste(self, marker, size))
+
+    def expand_pastes(self, text: str) -> str:
+        """Expand intact visible markers and discard this draft's paste storage."""
+        if self._pasted_blocks:
+            pattern = re.compile("|".join(
+                re.escape(marker) for marker in self._pasted_blocks
+            ))
+            # Expand in one pass so text inside one payload cannot accidentally
+            # be interpreted as another block's marker.
+            text = pattern.sub(lambda match: self._pasted_blocks[match.group()], text)
+        self._pasted_blocks.clear()
+        return text
+
+    @dataclass
+    class LargePaste(TextArea.Changed):
+        marker: str
+        size: int
+
+        @property
+        def control(self) -> TextArea:
+            return self.text_area
 
 
 def copy_windows_unicode(text: str) -> None:
@@ -154,7 +221,9 @@ class HalTui(App[int]):
 
     BINDINGS = [
         Binding("enter", "submit", "Send", priority=True),
-        Binding("ctrl+enter", "submit", "", show=False, priority=True),
+        # Ctrl+J is LF in terminal input and Textual exposes it distinctly from
+        # plain Enter (CR), making it a dependable multiline shortcut.
+        Binding("ctrl+j", "insert_newline", "", show=False, priority=True),
         Binding("f2", "submit", "Send", priority=True),
         Binding("f3", "insert_newline", "New line", priority=True),
         Binding("shift+enter", "insert_newline", "", show=False, priority=True),
@@ -203,9 +272,9 @@ class HalTui(App[int]):
         yield Static(id="status")
         yield VerticalScroll(id="transcript")
         with Vertical(id="composer-frame"):
-            yield TextArea(soft_wrap=True, placeholder="Ask HAL…", id="composer")
+            yield Composer(soft_wrap=True, placeholder="Ask HAL…", id="composer")
             with Horizontal(id="composer-controls"):
-                yield Static("Enter/F2 send · F3 new line", id="composer-hint")
+                yield Static("Enter/F2 send · Ctrl+J new line", id="composer-hint")
                 yield Button("Newline", id="newline")
                 yield Button("Cancel", id="cancel", disabled=True)
                 yield Button("Send", id="send", variant="primary")
@@ -311,15 +380,20 @@ class HalTui(App[int]):
         if self.busy:
             self.notify("HAL is already working; cancel the turn before sending another message.")
             return
-        composer = self.query_one("#composer", TextArea)
-        text = composer.text.strip()
-        if not text:
+        composer = self.query_one("#composer", Composer)
+        display = composer.text
+        if not display.strip():
             return
         composer.clear()
-        if self._handle_command(text):
+        if self._handle_command(display.strip()):
+            composer.expand_pastes("")
             return
-        self._write(Panel(Markdown(text), title="You", border_style="cyan"))
+        text = composer.expand_pastes(display)
+        self._write(Panel(Markdown(display), title="You", border_style="cyan"))
         self._start_turn(text)
+
+    def on_composer_large_paste(self, event: Composer.LargePaste) -> None:
+        self.notify(f"Stored large paste as {event.marker}")
 
     def action_insert_newline(self) -> None:
         if isinstance(self.screen, ConfirmScreen):

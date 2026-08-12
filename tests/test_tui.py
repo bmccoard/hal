@@ -6,6 +6,7 @@ from pathlib import Path
 import threading
 from types import SimpleNamespace
 
+from textual import events
 from textual.containers import VerticalScroll
 from textual.widgets import Button, Footer
 
@@ -15,7 +16,7 @@ from hal.config import Config
 from hal.models import ContentBlock, Message, Usage
 from hal.sayings import HAL_SAYINGS
 from hal.sessions import Metadata, SessionStore
-from hal.tui import AssistantResponse, HalTui
+from hal.tui import AssistantResponse, Composer, HalTui
 
 
 class FakeAgent:
@@ -177,6 +178,13 @@ def test_tui_portable_submit_and_multiline_keys(tmp_path: Path) -> None:
     async def scenario() -> None:
         async with app.run_test(size=(100, 32)) as pilot:
             composer = app.query_one("#composer")
+            composer.text = "leftright"
+            composer.cursor_location = (0, 4)
+            await pilot.press("ctrl+j")
+            assert composer.text == "left\nright"
+            assert composer.cursor_location == (1, 0)
+            assert agent.prompts == []
+
             composer.text = "two lines"
             await pilot.press("f3")
             assert "\n" in composer.text
@@ -189,6 +197,104 @@ def test_tui_portable_submit_and_multiline_keys(tmp_path: Path) -> None:
                 if not app.busy:
                     break
             assert agent.prompts == [("send with enter", "")]
+
+            composer.text = "send with f2"
+            await pilot.press("f2")
+            for _ in range(40):
+                await pilot.pause(0.025)
+                if not app.busy:
+                    break
+            assert agent.prompts == [
+                ("send with enter", ""),
+                ("send with f2", ""),
+            ]
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
+def test_small_paste_stays_editable_in_composer(tmp_path: Path) -> None:
+    app, agent, _store = _app(tmp_path)
+    pasted = "first\n/this-is-data\n!also-data\nlast"
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.post_message(events.Paste(pasted))
+            await pilot.pause()
+            assert composer.text == pasted
+            assert agent.prompts == []
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
+def test_large_paste_is_collapsed_then_expanded_exactly_on_submit(tmp_path: Path) -> None:
+    app, agent, _store = _app(tmp_path)
+    pasted = ("  /not-a-command\t→ Unicode ✓\n!not-shell\n" * 25_000) + "tail  "
+    assert len(pasted.encode("utf-8")) > 1_000_000
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.text = "Before\nAfter"
+            composer.cursor_location = (1, 0)
+            composer.post_message(events.Paste(pasted))
+            await pilot.pause()
+
+            assert pasted not in composer.text
+            assert composer.text.startswith("Before\n[Pasted block 1 · ")
+            assert composer.text.endswith(" bytes]After")
+            assert agent.prompts == []
+
+            display = composer.text
+            app.action_submit()
+            for _ in range(80):
+                await pilot.pause(0.025)
+                if not app.busy:
+                    break
+
+            assert agent.prompts == [(f"Before\n{pasted}After", "")]
+            assert display in str(app.query_one("#transcript").render()) or not app.busy
+            assert composer._pasted_blocks == {}
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
+def test_large_pasted_command_is_data_not_ui_command(tmp_path: Path) -> None:
+    app, agent, _store = _app(tmp_path)
+    pasted = "/clear\n" + ("payload\n" * 2_000)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            composer = app.query_one("#composer", Composer)
+            composer.post_message(events.Paste(pasted))
+            await pilot.pause()
+            assert composer.text.startswith("[Pasted block")
+            app.action_submit()
+            for _ in range(40):
+                await pilot.pause(0.025)
+                if not app.busy:
+                    break
+            assert agent.prompts == [(pasted, "")]
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
+def test_large_local_clipboard_paste_uses_collapsed_block(tmp_path: Path) -> None:
+    app, agent, _store = _app(tmp_path)
+    pasted = "clipboard ✓\n" * 10_000
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)):
+            composer = app.query_one("#composer", Composer)
+            app._clipboard = pasted
+            composer.action_paste()
+            assert composer.text.startswith("[Pasted block 1 · ")
+            assert composer.expand_pastes(composer.text) == pasted
+            assert agent.prompts == []
             app.action_safe_quit()
 
     asyncio.run(scenario())
@@ -204,7 +310,7 @@ def test_tui_composer_buttons_do_not_overlap_footer(tmp_path: Path) -> None:
             buttons = [app.query_one(f"#{name}", Button) for name in ("newline", "cancel", "send")]
 
             hint = str(app.query_one("#composer-hint").render())
-            assert hint == "Enter/F2 send · F3 new line"
+            assert hint == "Enter/F2 send · Ctrl+J new line"
             assert "Shift+Enter" not in hint
             assert app.query_one("#newline", Button).label.plain == "Newline"
             assert app.query_one("#newline", Button).region.width == 12

@@ -190,14 +190,19 @@ These are operating-system shell commands, not model tools or skills:
 test command itself. The model normally fulfills that request with its shell
 tool.
 
-The TUI uses plain `Enter` to send. Use `F3`, `Shift+Enter`, or the visible
-**New line** button to add a line; `Ctrl+Enter` and `F2` are additional send
-shortcuts. `Ctrl-C` or `Escape` cancels active work, `Ctrl+L` clears the
+The TUI uses plain `Enter` or `F2` to send. Use `Ctrl+J`, `F3`, `Shift+Enter`,
+or the visible **New line** button to add a line. `Ctrl-C` or
+`Escape` cancels active work, `Ctrl+L` clears the
 conversation, and `Ctrl+Q` quits safely. Some terminals—especially when VS Code
 has claimed a shortcut—never send modified Enter combinations to terminal apps;
-plain Enter, `F2`/`F3`, and the buttons remain available in that case. Windows
+plain Enter, `Ctrl+J`, `F2`/`F3`, and the buttons remain available in that case. Windows
 console hosts commonly reserve `Alt+Enter` for full-screen mode, so HAL does not
 use or advertise that combination.
+
+Large pastes are shown in the composer as compact `[Pasted block …]` markers so the
+terminal does not have to render the entire payload. HAL keeps the complete text in
+memory and expands it unchanged only when the message is sent; pasted slash commands
+and shell-looking lines remain message data rather than executing automatically.
 
 Every interactive startup displays one randomly selected HAL quotation. The small,
 central catalog lives in `src/hal/sayings.py`, so startup lines can be reviewed or

@@ -8,8 +8,11 @@ from hal.agent import (
     Event,
     EventKind,
     MaxOutputTokensError,
+    NoProgressError,
     RepeatedMalformedToolCallError,
     RepeatedToolCallError,
+    ProviderProtocolError,
+    ProviderResponseError,
     MaxTurnsError,
     UnexpectedStopReasonError,
 )
@@ -130,8 +133,96 @@ def test_tool_turn_is_committed_only_after_all_results_exist(tmp_path: Path) -> 
     with pytest.raises(KeyboardInterrupt):
         agent.send("start")
 
+    assert len(agent.messages) == 3
+    assert agent.messages[1].content[0].id == "call-1"
+    assert agent.messages[2].content[0].tool_use_id == "call-1"
+    assert agent.messages[2].content[0].is_error is True
+
+
+def test_interrupted_tool_batch_preserves_completed_and_skipped_results() -> None:
+    provider = ScriptedProvider([Response([
+        ContentBlock("tool_use", id="call-1", name="noop", input={}),
+        ContentBlock("tool_use", id="call-2", name="interrupt", input={}),
+        ContentBlock("tool_use", id="call-3", name="noop", input={}),
+    ], "tool_use")])
+    agent = Agent(provider, "model", "system", Registry([NoopTool(), InterruptTool()]))
+
+    with pytest.raises(KeyboardInterrupt):
+        agent.send("start")
+
+    results = agent.messages[-1].content
+    assert [result.tool_use_id for result in results] == ["call-1", "call-2", "call-3"]
+    assert results[0].content == "ok"
+    assert results[0].is_error is False
+    assert results[1].is_error is True
+    assert "KeyboardInterrupt" in results[1].content
+    assert "skipped" in results[2].content
+
+
+class FailingStreamingProvider:
+    name = "failing-stream"
+
+    def complete(self, request, cancellation=None):
+        raise AssertionError("buffered completion should not be used")
+
+    def stream(self, request, on_delta, cancellation=None):
+        on_delta(StreamDelta("commentary", "Checking. "))
+        on_delta(StreamDelta("text", "Partial answer"))
+        raise RuntimeError("connection lost")
+
+
+def test_stream_failure_preserves_visible_partial_output() -> None:
+    events: list[Event] = []
+    agent = Agent(
+        FailingStreamingProvider(), "model", "system", Registry([]),
+        on_event=events.append,
+    )
+
+    with pytest.raises(ProviderResponseError, match="connection lost") as raised:
+        agent.send("start")
+
+    assert raised.value.partial_text == "Partial answer"
+    assert [block.type for block in agent.messages[-1].content] == ["commentary", "text"]
+    assert events[-1].partial_text == "Partial answer"
+
+
+@pytest.mark.parametrize("calls, message", [
+    ([ContentBlock("tool_use", id="", name="noop", input={})], "without an id"),
+    ([ContentBlock("tool_use", id="same", name="noop", input={}),
+      ContentBlock("tool_use", id="same", name="noop", input={})], "duplicate"),
+    ([ContentBlock("tool_use", id="call-1", name="", input={})], "without a name"),
+])
+def test_invalid_tool_call_identity_is_rejected_before_execution(calls, message) -> None:
+    provider = ScriptedProvider([Response(calls, "tool_use")])
+    agent = Agent(provider, "model", "system", Registry([NoopTool()]))
+
+    with pytest.raises(ProviderProtocolError, match=message):
+        agent.send("start")
+
     assert len(agent.messages) == 1
-    assert agent.messages[0].role == "user"
+
+
+def test_tool_use_stop_without_call_is_protocol_error() -> None:
+    provider = ScriptedProvider([Response([], "tool_use")])
+    agent = Agent(provider, "model", "system", Registry([]))
+
+    with pytest.raises(ProviderProtocolError, match="without returning a tool call"):
+        agent.send("start")
+
+    assert len(provider.requests) == 1
+
+
+def test_event_handler_failure_does_not_abort_turn() -> None:
+    def broken_handler(_event):
+        raise RuntimeError("display failed")
+
+    agent = Agent(
+        ScriptedProvider([Response([ContentBlock("text", text="Done.")])]),
+        "model", "system", Registry([]), on_event=broken_handler,
+    )
+
+    assert agent.send("start") == "Done."
+    assert len(agent.event_errors) == 2
 
 
 def test_unknown_failed_and_denied_calls_get_ordered_error_results() -> None:
@@ -209,6 +300,43 @@ def test_three_identical_successful_calls_stop_turn() -> None:
 
     assert len(provider.requests) == 3
     assert "three identical calls" in agent.messages[-1].content[0].content
+
+
+def test_three_repetitions_of_short_tool_cycle_stop_turn() -> None:
+    responses = []
+    for index, arguments in enumerate((
+        {"value": "a"}, {"value": "b"},
+        {"value": "a"}, {"value": "b"},
+        {"value": "a"}, {"value": "b"},
+    ), 1):
+        responses.append(Response([ContentBlock(
+            "tool_use", id=f"call-{index}", name="noop", input=arguments,
+        )], "tool_use"))
+    provider = ScriptedProvider(responses)
+    agent = Agent(provider, "model", "system", Registry([NoopTool()]))
+
+    with pytest.raises(RepeatedToolCallError, match="cycle of length 2"):
+        agent.send("start")
+
+    assert len(provider.requests) == 6
+    assert "sequence of 2 tool calls repeated three times" in agent.messages[-1].content[0].content
+
+
+def test_tool_signature_canonicalizes_nested_argument_key_order() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock(
+            "tool_use", id=f"call-{index}", name="noop", input=arguments,
+        )], "tool_use")
+        for index, arguments in enumerate((
+            {"outer": {"a": 1, "b": 2}},
+            {"outer": {"b": 2, "a": 1}},
+            {"outer": {"a": 1, "b": 2}},
+        ), 1)
+    ])
+    agent = Agent(provider, "model", "system", Registry([NoopTool()]))
+
+    with pytest.raises(RepeatedToolCallError, match="identical"):
+        agent.send("start")
 
 
 def test_allowed_tools_limit_schema_and_execution() -> None:
@@ -292,6 +420,31 @@ def test_pause_turn_replays_assistant_text_and_continues() -> None:
     assert agent.send("start") == "Still working.\nDone."
     assert len(provider.requests) == 2
     assert provider.requests[1].messages[-1].content[0].text == "Still working."
+
+
+def test_three_empty_pause_turns_stop_as_no_progress() -> None:
+    provider = ScriptedProvider([Response([], "pause_turn") for _ in range(3)])
+    agent = Agent(provider, "model", "system", Registry([]))
+
+    with pytest.raises(NoProgressError, match="three empty pause turns"):
+        agent.send("start")
+
+    assert len(provider.requests) == 3
+    assert len(agent.messages) == 1
+
+
+def test_nonempty_pause_turn_resets_no_progress_count() -> None:
+    provider = ScriptedProvider([
+        Response([], "pause_turn"),
+        Response([], "pause_turn"),
+        Response([ContentBlock("text", text="Working.")], "pause_turn"),
+        Response([], "pause_turn"),
+        Response([], "pause_turn"),
+        Response([ContentBlock("text", text="Done.")], "end_turn"),
+    ])
+    agent = Agent(provider, "model", "system", Registry([]))
+
+    assert agent.send("start") == "Working.\nDone."
 
 
 def test_max_tokens_returns_typed_error_with_partial_text() -> None:

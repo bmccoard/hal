@@ -22,8 +22,12 @@ The first slice provides:
 - a scrollable Markdown transcript whose active response card updates incrementally,
   plus restored session history;
 - a multiline composer with portable terminal controls (`Enter` sends;
-  `F3`, `Shift+Enter`, or the New line button inserts a newline; `F2` and
-  `Ctrl+Enter` are additional send paths; Windows-reserved `Alt+Enter` is avoided);
+  `Ctrl+J`, `F3`, `Shift+Enter`, or the New line button inserts a newline;
+  `F2` is an additional send path; unreliable modified-Enter shortcuts and the
+  Windows-reserved `Alt+Enter` combination are not advertised);
+- compact in-memory placeholders for pastes of 8 KiB or more, expanded exactly once
+  at submission so large payloads do not enter the render document or activate
+  command handling;
 - copy buttons on assistant response cards that copy the original Markdown source;
 - concise tool receipts, with full calls/results when `output.verbose` is enabled;
 - project, Git branch, provider/model, session, and elapsed-work status;

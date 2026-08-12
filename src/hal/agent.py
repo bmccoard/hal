@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
+import json
 import time
 from typing import NoReturn
 
@@ -42,6 +43,18 @@ class RepeatedMalformedToolCallError(AgentError):
 
 class RepeatedToolCallError(AgentError):
     pass
+
+
+class ProviderResponseError(AgentError):
+    """A provider failed after it may have emitted useful streamed output."""
+
+
+class ProviderProtocolError(AgentError):
+    """A provider returned a response that cannot form a valid transcript."""
+
+
+class NoProgressError(AgentError):
+    """The provider repeatedly requested continuation without producing output."""
 
 
 class EventKind(str, Enum):
@@ -99,6 +112,7 @@ class Agent:
         self.usage = usage or Usage()
         self.max_turns = max_turns
         self.on_event = on_event or (lambda _event: None)
+        self.event_errors: list[Exception] = []
         self._send_started = 0.0
 
     def send(self, text: str, display_text: str = "",
@@ -115,9 +129,20 @@ class Agent:
         self.messages.append(Message("user", [ContentBlock("text", text=text)], display_text=display_text))
         final_parts: list[str] = []
         malformed_counts: dict[str, int] = {}
-        previous_tool_signature: tuple[str, str, bool, str] | None = None
-        repeated_tool_count = 0
+        tool_signatures: list[tuple[str, str, bool, str]] = []
+        no_progress_count = 0
         for _ in range(self.max_turns):
+            streamed_blocks: list[ContentBlock] = []
+
+            def emit_delta(delta: StreamDelta) -> None:
+                if delta.text:
+                    block_type = "commentary" if delta.kind == "commentary" else "text"
+                    if streamed_blocks and streamed_blocks[-1].type == block_type:
+                        streamed_blocks[-1].text += delta.text
+                    else:
+                        streamed_blocks.append(ContentBlock(block_type, text=delta.text))
+                self._emit_delta(delta)
+
             try:
                 cancellation.raise_if_cancelled()
                 request = Request(
@@ -128,13 +153,26 @@ class Agent:
                 stream = getattr(self.provider, "stream", None)
                 streamed = callable(stream) and getattr(self.provider, "streaming_enabled", True)
                 if streamed:
-                    response = stream(request, self._emit_delta, cancellation)
+                    response = stream(request, emit_delta, cancellation)
                 else:
                     response = self.provider.complete(request, cancellation)
                 cancellation.raise_if_cancelled()
-            except Exception as exc:
-                self._emit(Event(EventKind.ERROR, error=exc))
+            except CancelledError as exc:
+                self._append_streamed_partial(streamed_blocks)
+                self._emit(Event(
+                    EventKind.ERROR, text=str(exc), error=exc,
+                    partial_text=self._partial_from(final_parts, streamed_blocks),
+                ))
                 raise
+            except Exception as exc:
+                partial = self._partial_from(final_parts, streamed_blocks)
+                self._append_streamed_partial(streamed_blocks)
+                error = ProviderResponseError(str(exc), partial)
+                self._emit(Event(
+                    EventKind.ERROR, text=str(error), error=error,
+                    partial_text=partial,
+                ))
+                raise error from exc
             self.usage.add(response.usage)
             assistant_blocks = response.content
             for block in assistant_blocks:
@@ -149,6 +187,18 @@ class Agent:
                         self._emit(Event(EventKind.ASSISTANT_COMMENTARY, text=block.text))
             partial = "\n".join(final_parts).strip()
             calls = [block for block in assistant_blocks if block.type == "tool_use"]
+
+            self._validate_response(response.stop_reason, calls, partial)
+            meaningful = bool(calls) or any(
+                block.text for block in assistant_blocks
+                if block.type in {"text", "commentary"}
+            )
+            no_progress_count = 0 if meaningful else no_progress_count + 1
+            if response.stop_reason == "pause_turn" and no_progress_count >= 3:
+                self._fail(NoProgressError(
+                    "provider returned three empty pause turns without making progress",
+                    partial,
+                ))
 
             if response.stop_reason not in _KNOWN_STOP_REASONS:
                 self._append_safe_assistant(assistant_blocks)
@@ -168,7 +218,8 @@ class Agent:
                 ))
 
             if not calls:
-                self.messages.append(Message("assistant", assistant_blocks))
+                if assistant_blocks:
+                    self.messages.append(Message("assistant", assistant_blocks))
                 if response.stop_reason in {"", "end_turn", "stop_sequence"}:
                     self._emit(Event(EventKind.DONE))
                     return partial
@@ -176,16 +227,15 @@ class Agent:
                     self._fail(MaxOutputTokensError(
                         "provider response was truncated at the token limit", partial
                     ))
-                # pause_turn explicitly asks for another provider response. A
-                # tool_use stop without calls is also replayed, matching HAL's
-                # provider-neutral loop instead of silently treating it as done.
+                # pause_turn explicitly asks for another provider response.
                 continue
 
-            # Do not append the assistant tool request until every call has a
-            # matching result. If execution is interrupted by a BaseException,
-            # neither side is committed and the stored transcript stays valid.
+            # Commit one result for every announced call even when a tool raises a
+            # BaseException. Earlier tools may already have changed external state,
+            # so dropping the batch would make retries unsafe and history untruthful.
             results: list[ContentBlock] = []
             cancelled: CancelledError | None = None
+            interrupted: BaseException | None = None
             repeated_malformed: RepeatedMalformedToolCallError | None = None
             repeated_tool: RepeatedToolCallError | None = None
             for call in calls:
@@ -194,8 +244,10 @@ class Agent:
                     tool_use_id=call.id,
                 ))
                 tool_started = time.monotonic()
-                error = cancelled is not None
-                if cancelled is not None:
+                error = cancelled is not None or interrupted is not None
+                if interrupted is not None:
+                    output = "skipped because an earlier tool interrupted the agent turn"
+                elif cancelled is not None:
                     output = "skipped because the agent turn was cancelled"
                 elif call.argument_error:
                     error = True
@@ -224,26 +276,38 @@ class Agent:
                     except Exception as exc:
                         error = True
                         output = str(exc)
+                    except BaseException as exc:
+                        interrupted = exc
+                        error = True
+                        output = f"tool interrupted by {type(exc).__name__}"
                 output = bound_output(output)
                 signature = (
                     call.name,
-                    repr(sorted(call.input.items())),
+                    self._canonical_arguments(call.input),
                     error,
                     output,
                 )
-                if not call.argument_error and signature == previous_tool_signature:
-                    repeated_tool_count += 1
-                else:
-                    repeated_tool_count = 1
-                previous_tool_signature = signature
-                if not call.argument_error and repeated_tool_count >= 3:
-                    output = bound_output(
-                        output + " HAL stopped this turn after three identical "
-                        f"calls to {call.name!r} with the same result."
-                    )
-                    repeated_tool = RepeatedToolCallError(
-                        f"repeated identical tool call {call.name!r}", partial,
-                    )
+                if not call.argument_error:
+                    tool_signatures.append(signature)
+                    cycle_length = self._repeated_cycle_length(tool_signatures)
+                    if cycle_length:
+                        if cycle_length == 1:
+                            notice = (
+                                " HAL stopped this turn after three identical "
+                                f"calls to {call.name!r} with the same result."
+                            )
+                            message = f"repeated identical tool call {call.name!r}"
+                        else:
+                            notice = (
+                                " HAL stopped this turn after the same sequence of "
+                                f"{cycle_length} tool calls repeated three times."
+                            )
+                            message = (
+                                "repeated tool-call cycle of length "
+                                f"{cycle_length} ending at {call.name!r}"
+                            )
+                        output = bound_output(output + notice)
+                        repeated_tool = RepeatedToolCallError(message, partial)
                 results.append(ContentBlock("tool_result", tool_use_id=call.id, content=output, is_error=error))
                 self._emit(Event(
                     EventKind.TOOL_RESULT, text=output, name=call.name,
@@ -255,6 +319,12 @@ class Agent:
             if cancelled is not None:
                 self._emit(Event(EventKind.ERROR, text=str(cancelled), error=cancelled))
                 raise cancelled
+            if interrupted is not None:
+                self._emit(Event(
+                    EventKind.ERROR, text=str(interrupted), error=interrupted,
+                    partial_text=partial,
+                ))
+                raise interrupted
             if repeated_malformed is not None:
                 self._fail(repeated_malformed)
             if repeated_tool is not None:
@@ -272,7 +342,12 @@ class Agent:
     def _emit(self, event: Event) -> None:
         if self._send_started:
             event.elapsed_ms = int((time.monotonic() - self._send_started) * 1000)
-        self.on_event(event)
+        try:
+            self.on_event(event)
+        except Exception as exc:
+            # Presentation and logging are observers. Their failure must not alter
+            # tool execution or transcript commit semantics.
+            self.event_errors.append(exc)
 
     def _emit_delta(self, delta: StreamDelta) -> None:
         kind = (
@@ -285,6 +360,60 @@ class Agent:
         safe = [block for block in blocks if block.type != "tool_use"]
         if safe:
             self.messages.append(Message("assistant", safe))
+
+    def _append_streamed_partial(self, blocks: list[ContentBlock]) -> None:
+        if blocks:
+            self.messages.append(Message("assistant", blocks))
+
+    @staticmethod
+    def _partial_from(final_parts: list[str], streamed_blocks: list[ContentBlock]) -> str:
+        parts = list(final_parts)
+        parts.extend(
+            block.text for block in streamed_blocks
+            if block.type == "text" and block.text
+        )
+        return "\n".join(parts).strip()
+
+    def _validate_response(self, stop_reason: str, calls: list[ContentBlock],
+                           partial: str) -> None:
+        if stop_reason == "tool_use" and not calls:
+            self._fail(ProviderProtocolError(
+                "provider stopped for tool use without returning a tool call", partial,
+            ))
+        seen: set[str] = set()
+        for call in calls:
+            if not call.id:
+                self._fail(ProviderProtocolError(
+                    "provider returned a tool call without an id", partial,
+                ))
+            if call.id in seen:
+                self._fail(ProviderProtocolError(
+                    f"provider returned duplicate tool call id {call.id!r}", partial,
+                ))
+            if not call.name:
+                self._fail(ProviderProtocolError(
+                    f"provider returned tool call {call.id!r} without a name", partial,
+                ))
+            seen.add(call.id)
+
+    @staticmethod
+    def _canonical_arguments(arguments: dict[str, object]) -> str:
+        """Return a stable signature even for extension-provided non-JSON values."""
+        return json.dumps(
+            arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+            default=lambda value: f"<{type(value).__module__}.{type(value).__qualname__}:{value!r}>",
+        )
+
+    @staticmethod
+    def _repeated_cycle_length(
+        signatures: list[tuple[str, str, bool, str]], max_cycle: int = 4,
+    ) -> int:
+        """Detect three consecutive copies of a short tool/result sequence."""
+        for length in range(1, min(max_cycle, len(signatures) // 3) + 1):
+            tail = signatures[-length:]
+            if signatures[-2 * length:-length] == tail and signatures[-3 * length:-2 * length] == tail:
+                return length
+        return 0
 
     def _fail(self, error: AgentError) -> NoReturn:
         self._emit(Event(

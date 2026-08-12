@@ -155,9 +155,9 @@ tests, or documentation recorded in the implementation log.
   layout, selectable text, status line, elapsed time, cwd, branch, provider, and model.
   - [x] Update one live Markdown response card from provider deltas without blocking
     input, status updates, or cancellation.
-  - [x] Provide portable composer controls: Enter and F2 send; F3, Shift+Enter, and a
-    visible button add a line; retain Ctrl+Enter where the terminal delivers it and
-    avoid the Windows-reserved Alt+Enter combination.
+  - [x] Provide portable composer controls: Enter and F2 send; Ctrl+J, F3,
+    Shift+Enter, and a visible button add a line; avoid unreliable modified-Enter
+    shortcuts and the Windows-reserved Alt+Enter combination.
 - [ ] Render live tool activity, concise completed receipts, errors, parallel groups,
   workflow progress, and a visible subagent tree.
 - [ ] Implement `output.verbose`: concise mode by default; hide routine lines such as
