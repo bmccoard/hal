@@ -62,6 +62,11 @@ def test_tui_submits_in_worker_renders_events_and_saves_session(tmp_path: Path) 
     async def scenario() -> None:
         async with app.run_test(size=(100, 32)) as pilot:
             assert app.startup_saying in HAL_SAYINGS
+            transcript = "\n".join(
+                str(widget.render()) for widget in app.query(".transcript-entry")
+            )
+            assert "Shift+drag selects text" in transcript
+            assert "Ctrl+Shift+C copies" in transcript
             app.query_one("#composer").text = "check the project"
             app.action_submit()
             for _ in range(40):
@@ -170,6 +175,22 @@ def test_windows_clipboard_accepts_unicode(monkeypatch) -> None:
     memory = clipboard["memory"]
     assert isinstance(memory, ctypes.Array)
     assert memory.raw.decode("utf-16-le").rstrip("\0") == "step → done ✓"
+
+
+def test_copy_selection_uses_native_windows_clipboard(monkeypatch, tmp_path: Path) -> None:
+    app, _agent, _store = _app(tmp_path)
+    copied: list[str] = []
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)):
+            monkeypatch.setattr("hal.tui.os.name", "nt")
+            monkeypatch.setattr("hal.tui.copy_windows_unicode", copied.append)
+            monkeypatch.setattr(app.screen, "get_selected_text", lambda: "selected ✓")
+            app.action_copy_selection()
+            assert copied == ["selected ✓"]
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
 
 
 def test_tui_portable_submit_and_multiline_keys(tmp_path: Path) -> None:

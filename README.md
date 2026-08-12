@@ -204,6 +204,10 @@ terminal does not have to render the entire payload. HAL keeps the complete text
 memory and expands it unchanged only when the message is sent; pasted slash commands
 and shell-looking lines remain message data rather than executing automatically.
 
+Transcript text may be selected with `Shift`+drag and copied with `Ctrl+Shift+C`.
+HAL also provides an internal selection-copy action; on Windows that action uses the
+native clipboard API rather than relying on OSC 52 support.
+
 Every interactive startup displays one randomly selected HAL quotation. The small,
 central catalog lives in `src/hal/sayings.py`, so startup lines can be reviewed or
 extended without changing either interactive interface. Headless `hal run` does not

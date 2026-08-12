@@ -94,6 +94,13 @@ widget insertion/rendering, or HAL's submission path; measure each boundary.
 - [ ] Add a manual TUI smoke-test document that release checks can repeat on Windows,
   Linux, and macOS.
 
+## Transcript selection and copying
+
+- [x] Bind `Ctrl+Shift+C` to copy Textual's current mouse selection.
+- [x] Use the native Windows clipboard API for selected transcript text rather than
+  relying on terminal-native selection or OSC 52 support.
+- [ ] Verify mouse selection and `Ctrl+Shift+C` in Windows Terminal.
+
 ## Verification log
 
 - [x] Focused automated TUI tests pass.

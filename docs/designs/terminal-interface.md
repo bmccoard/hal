@@ -29,6 +29,9 @@ The first slice provides:
   at submission so large payloads do not enter the render document or activate
   command handling;
 - copy buttons on assistant response cards that copy the original Markdown source;
+- `Shift`+drag terminal selection plus an internal transcript selection action;
+  `Ctrl+Shift+C` copies through the native Windows clipboard API or the terminal
+  clipboard on other platforms;
 - concise tool receipts, with full calls/results when `output.verbose` is enabled;
 - project, Git branch, provider/model, session, and elapsed-work status;
 - `/help`, `/sessions`, `/resume`, `/clear`, `/model`, `/exit`, named phases, skills,

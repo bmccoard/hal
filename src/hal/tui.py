@@ -228,6 +228,7 @@ class HalTui(App[int]):
         Binding("f3", "insert_newline", "New line", priority=True),
         Binding("shift+enter", "insert_newline", "", show=False, priority=True),
         Binding("ctrl+c", "cancel_turn", "Cancel", priority=True),
+        Binding("ctrl+shift+c", "copy_selection", "Copy selection", priority=True),
         Binding("escape", "cancel_turn", "Cancel", priority=True),
         Binding("ctrl+q", "safe_quit", "Quit", priority=True),
         Binding("ctrl+l", "clear_conversation", "Clear", priority=True),
@@ -289,7 +290,11 @@ class HalTui(App[int]):
 
     def _render_history(self) -> None:
         if not self.session.messages:
-            self._write(Text("HAL is ready. Enter sends; F3 or Shift+Enter adds a line; Ctrl-C or Escape cancels active work.", style="dim"))
+            self._write(Text(
+                "HAL is ready. Enter sends; Ctrl+J adds a line; Shift+drag selects "
+                "text; Ctrl+Shift+C copies; Ctrl-C or Escape cancels active work.",
+                style="dim",
+            ))
             return
         for message in self.session.messages:
             self._render_message(message)
@@ -364,6 +369,10 @@ class HalTui(App[int]):
                 self._copy_response(response.response_text)
 
     def _copy_response(self, text: str) -> None:
+        self._copy_text(text, "Response Markdown copied to clipboard.")
+
+    def _copy_text(self, text: str, success: str) -> None:
+        """Copy through the native Windows API or Textual's terminal clipboard."""
         try:
             if os.name == "nt":
                 copy_windows_unicode(text)
@@ -372,7 +381,15 @@ class HalTui(App[int]):
         except OSError as exc:
             self.notify(f"Could not copy response: {exc}", severity="error")
             return
-        self.notify("Response Markdown copied to clipboard.")
+        self.notify(success)
+
+    def action_copy_selection(self) -> None:
+        """Copy Textual's current mouse selection without terminal interception."""
+        selected = self.screen.get_selected_text()
+        if not selected:
+            self.notify("Select transcript text first.")
+            return
+        self._copy_text(selected, "Selected text copied to clipboard.")
 
     def action_submit(self) -> None:
         if isinstance(self.screen, ConfirmScreen):
