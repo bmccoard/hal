@@ -273,10 +273,90 @@ class GitPushTool:
         return json.dumps({"backend": self.backend.name, "result": result})
 
 
+class GitCheckoutTool:
+    parallel_safe = False
+
+    def __init__(self, backend: GitBackend) -> None:
+        self.backend = backend
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            "git_checkout",
+            "Switch to an existing branch or commit, or create and switch to a new branch. "
+            "Use create=true to create the branch before switching.",
+            {
+                "type": "object",
+                "properties": {
+                    "target": {"type": "string"},
+                    "create": {"type": "boolean"},
+                },
+                "required": ["target"],
+            },
+        )
+
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        target = arguments.get("target")
+        if not isinstance(target, str) or not target.strip():
+            raise ValueError("target must be a non-empty string")
+        target = target.strip()
+        if target.startswith("-"):
+            raise ValueError("target must not begin with '-'")
+        if any(c in target for c in {"\0", "\r", "\n"}):
+            raise ValueError("target must not contain control characters")
+        create = arguments.get("create", False)
+        if not isinstance(create, bool):
+            raise ValueError("create must be true or false")
+        branch = self.backend.checkout(target, create, cancellation)
+        return json.dumps({"backend": self.backend.name, "branch": branch, "created": create})
+
+
+class GitShowTool:
+    parallel_safe = True
+
+    def __init__(self, backend: GitBackend) -> None:
+        self.backend = backend
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            "git_show",
+            "Show a commit, tag, or the contents of a file at a given ref. "
+            "Provide ref (e.g. HEAD, a branch name, or a commit SHA). "
+            "Optionally provide path to retrieve the file content at that ref.",
+            {
+                "type": "object",
+                "properties": {
+                    "ref": {"type": "string"},
+                    "path": {"type": "string"},
+                },
+                "required": ["ref"],
+            },
+        )
+
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        ref = arguments.get("ref")
+        if not isinstance(ref, str) or not ref.strip():
+            raise ValueError("ref must be a non-empty string")
+        ref = ref.strip()
+        raw_path = arguments.get("path")
+        path: str | None = None
+        if raw_path is not None:
+            if not isinstance(raw_path, str) or not raw_path.strip():
+                raise ValueError("path must be a non-empty string")
+            normalized = normalize_paths(self.backend.root, [raw_path.strip()])
+            path = normalized[0]
+            _reject_sensitive([path], "show")
+        return self.backend.show(ref, path, cancellation) or "(empty)"
+
+
 def git_tools(root: Path, preference: str = "auto") -> list[object]:
     backend = create_git_backend(root, preference)
     return [
         GitInitTool(backend), GitStageTool(backend), GitUnstageTool(backend),
         GitStatusTool(backend), GitDiffTool(backend), GitLogTool(backend),
         GitCommitTool(backend), GitPushTool(backend),
+        GitCheckoutTool(backend), GitShowTool(backend),
     ]
