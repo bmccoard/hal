@@ -142,12 +142,28 @@ class GitDiffTool:
     def spec(self) -> ToolSpec:
         return ToolSpec(
             "git_diff",
-            "Show unstaged or staged repository changes without modifying them. Sensitive local config is omitted and must not be inspected through another tool.",
+            "Show repository changes without modifying them. "
+            "By default shows unstaged working-tree changes. "
+            "Pass staged=true for staged (index vs HEAD) changes. "
+            "Pass from_ref (e.g. HEAD~1) to compare that commit against the working tree or index. "
+            "Pass both from_ref and to_ref (e.g. HEAD~1 and HEAD) to compare two commits. "
+            "Sensitive local config is omitted and must not be inspected through another tool.",
             {
                 "type": "object",
                 "properties": {
                     "staged": {"type": "boolean"},
                     "paths": {"type": "array", "items": {"type": "string"}},
+                    "from_ref": {
+                        "type": "string",
+                        "description": "Start commit/ref (e.g. HEAD~1, a branch name, or a SHA). "
+                                       "When provided alone, compares this ref against the working tree. "
+                                       "When provided with to_ref, compares from_ref..to_ref.",
+                    },
+                    "to_ref": {
+                        "type": "string",
+                        "description": "End commit/ref (e.g. HEAD, a branch name, or a SHA). "
+                                       "Requires from_ref. Compares from_ref..to_ref.",
+                    },
                 },
             },
         )
@@ -159,6 +175,18 @@ class GitDiffTool:
         staged = arguments.get("staged", False)
         if not isinstance(staged, bool):
             raise ValueError("staged must be true or false")
+        from_ref = arguments.get("from_ref")
+        to_ref = arguments.get("to_ref")
+        if from_ref is not None and (not isinstance(from_ref, str) or not from_ref.strip()):
+            raise ValueError("from_ref must be a non-empty string")
+        if to_ref is not None and (not isinstance(to_ref, str) or not to_ref.strip()):
+            raise ValueError("to_ref must be a non-empty string")
+        if to_ref and not from_ref:
+            raise ValueError("to_ref requires from_ref to be set")
+        if from_ref is not None:
+            from_ref = from_ref.strip()
+        if to_ref is not None:
+            to_ref = to_ref.strip()
         if paths is not None:
             _reject_sensitive(paths, "display a diff for")
         else:
@@ -167,10 +195,10 @@ class GitDiffTool:
             omitted = sensitive_git_paths(candidates)
             if omitted:
                 paths = [path for path in candidates if path not in omitted]
-                output = self.backend.diff(staged, paths, cancellation) if paths else ""
+                output = self.backend.diff(staged, paths, from_ref, to_ref, cancellation) if paths else ""
                 prefix = output or "no matching changes"
                 return prefix + "\nomitted sensitive paths: " + ", ".join(omitted)
-        output = self.backend.diff(staged, paths, cancellation)
+        output = self.backend.diff(staged, paths, from_ref, to_ref, cancellation)
         return output or "no matching changes"
 
 

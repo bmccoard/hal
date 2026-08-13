@@ -66,6 +66,7 @@ class GitBackend(Protocol):
     def unstage(self, paths: list[str],
                 cancellation: CancellationToken | None = None) -> None: ...
     def diff(self, staged: bool = False, paths: list[str] | None = None,
+             from_ref: str | None = None, to_ref: str | None = None,
              cancellation: CancellationToken | None = None) -> str: ...
     def log(self, count: int = 10,
             cancellation: CancellationToken | None = None) -> list[GitCommit]: ...
@@ -188,10 +189,17 @@ class NativeGitBackend:
         self._run([*arguments, *paths], cancellation)
 
     def diff(self, staged: bool = False, paths: list[str] | None = None,
+             from_ref: str | None = None, to_ref: str | None = None,
              cancellation: CancellationToken | None = None) -> str:
         self._require_repository(cancellation)
         arguments = ["diff"]
-        if staged:
+        if from_ref and to_ref:
+            arguments.extend([from_ref, to_ref])
+        elif from_ref:
+            if staged:
+                arguments.append("--cached")
+            arguments.append(from_ref)
+        elif staged:
             arguments.append("--cached")
         if paths:
             arguments.extend(["--", *paths])
@@ -272,6 +280,25 @@ class DulwichGitBackend:
             return Repo.discover(self.root)
         except NotGitRepository as exc:
             raise GitError(f"not a Git repository: {self.root}") from exc
+
+    def _resolve_ref(self, repo: Repo, ref: str) -> bytes:
+        """Resolve a ref string (including HEAD~N ancestor notation) to a SHA."""
+        import re
+        match = re.fullmatch(r"(.+?)~(\d+)", ref)
+        if match:
+            base, count = match.group(1), int(match.group(2))
+        else:
+            base, count = ref, 0
+        from dulwich.objectspec import parse_commit as _parse_commit
+        try:
+            commit = _parse_commit(repo, base.encode())
+        except (KeyError, ValueError) as exc:
+            raise GitError(f"unknown ref: {ref!r}") from exc
+        for _ in range(count):
+            if not commit.parents:
+                raise GitError(f"ref {ref!r} has no parent at depth {count}")
+            commit = repo[commit.parents[0]]
+        return commit.id
 
     def init(self, cancellation: CancellationToken | None = None) -> str:
         cancellation = cancellation_or_default(cancellation)
@@ -357,11 +384,22 @@ class DulwichGitBackend:
         cancellation.raise_if_cancelled()
 
     def diff(self, staged: bool = False, paths: list[str] | None = None,
+             from_ref: str | None = None, to_ref: str | None = None,
              cancellation: CancellationToken | None = None) -> str:
         cancellation = cancellation_or_default(cancellation)
         cancellation.raise_if_cancelled()
         output = BoundedOutput(DEFAULT_OUTPUT_LIMIT)
-        porcelain.diff(self.root, staged=staged, paths=paths, outstream=output)
+        resolved_from: bytes | None = None
+        resolved_to: bytes | None = None
+        if from_ref or to_ref:
+            with self._repo() as repo:
+                if from_ref:
+                    resolved_from = self._resolve_ref(repo, from_ref)
+                if to_ref:
+                    resolved_to = self._resolve_ref(repo, to_ref)
+        porcelain.diff(self.root, commit=resolved_from, commit2=resolved_to,
+                       staged=staged if not (from_ref or to_ref) else False,
+                       paths=paths, outstream=output)
         cancellation.raise_if_cancelled()
         return output.text()
 
