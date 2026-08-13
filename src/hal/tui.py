@@ -52,9 +52,16 @@ class Composer(TextArea):
         self._insert_paste(event.text)
 
     def action_paste(self) -> None:
-        """Apply the same collapsing behavior to Textual's local clipboard."""
-        if not self.read_only:
-            self._insert_paste(self.app.clipboard)
+        """Paste from the native clipboard, retaining Textual's fallback."""
+        if self.read_only:
+            return
+        try:
+            text = read_windows_unicode() if os.name == "nt" else self.app.clipboard
+        except OSError as exc:
+            self.app.notify(f"Could not read clipboard: {exc}", severity="error")
+            return
+        if text:
+            self._insert_paste(text)
 
     def _insert_paste(self, text: str) -> None:
         """Insert a small paste or a compact marker for a large payload."""
@@ -143,6 +150,45 @@ def copy_windows_unicode(text: str) -> None:
     finally:
         if memory and not transferred:
             kernel32.GlobalFree(memory)
+        user32.CloseClipboard()
+
+
+def read_windows_unicode() -> str:
+    """Read Unicode text from the native Windows clipboard."""
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    user32.OpenClipboard.argtypes = [wintypes.HWND]
+    user32.OpenClipboard.restype = wintypes.BOOL
+    user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
+    user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
+    user32.GetClipboardData.argtypes = [wintypes.UINT]
+    user32.GetClipboardData.restype = ctypes.c_void_p
+    user32.CloseClipboard.argtypes = []
+    user32.CloseClipboard.restype = wintypes.BOOL
+    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalLock.restype = ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalUnlock.restype = wintypes.BOOL
+    kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
+    kernel32.GlobalSize.restype = ctypes.c_size_t
+
+    if not user32.IsClipboardFormatAvailable(13):  # CF_UNICODETEXT
+        return ""
+    if not user32.OpenClipboard(None):
+        raise ctypes.WinError(ctypes.get_last_error())
+    try:
+        memory = user32.GetClipboardData(13)
+        if not memory:
+            raise ctypes.WinError(ctypes.get_last_error())
+        size = kernel32.GlobalSize(memory)
+        source = kernel32.GlobalLock(memory)
+        if not source:
+            raise ctypes.WinError(ctypes.get_last_error())
+        try:
+            return ctypes.string_at(source, size).decode("utf-16-le").rstrip("\0")
+        finally:
+            kernel32.GlobalUnlock(memory)
+    finally:
         user32.CloseClipboard()
 
 

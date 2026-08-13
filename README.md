@@ -203,6 +203,8 @@ Large pastes are shown in the composer as compact `[Pasted block …]` markers s
 terminal does not have to render the entire payload. HAL keeps the complete text in
 memory and expands it unchanged only when the message is sent; pasted slash commands
 and shell-looking lines remain message data rather than executing automatically.
+On Windows, `Ctrl+V` reads Unicode text directly from the native clipboard; terminal
+bracketed paste and Textual's local clipboard remain available on other platforms.
 
 Transcript text may be selected with `Shift`+drag and copied with `Ctrl+Shift+C`.
 HAL also provides an internal selection-copy action; on Windows that action uses the

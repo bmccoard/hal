@@ -177,6 +177,41 @@ def test_windows_clipboard_accepts_unicode(monkeypatch) -> None:
     assert memory.raw.decode("utf-16-le").rstrip("\0") == "step → done ✓"
 
 
+def test_windows_clipboard_reads_unicode(monkeypatch) -> None:
+    from hal.tui import read_windows_unicode
+
+    encoded = "pasted → data ✓\0".encode("utf-16-le")
+    memory = ctypes.create_string_buffer(encoded)
+
+    class Function:
+        def __init__(self, callback):
+            object.__setattr__(self, "callback", callback)
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+        def __setattr__(self, _name, _value):
+            pass
+
+    class User32:
+        IsClipboardFormatAvailable = Function(lambda _format_id: 1)
+        OpenClipboard = Function(lambda _owner: 1)
+        GetClipboardData = Function(lambda _format_id: memory)
+        CloseClipboard = Function(lambda: 1)
+
+    class Kernel32:
+        GlobalSize = Function(lambda _memory: len(encoded))
+        GlobalLock = Function(lambda value: ctypes.addressof(value))
+        GlobalUnlock = Function(lambda _memory: 1)
+
+    libraries = iter([User32(), Kernel32()])
+    monkeypatch.setattr(
+        ctypes, "WinDLL", lambda *_args, **_kwargs: next(libraries), raising=False
+    )
+
+    assert read_windows_unicode() == "pasted → data ✓"
+
+
 def test_copy_selection_uses_native_windows_clipboard(monkeypatch, tmp_path: Path) -> None:
     app, _agent, _store = _app(tmp_path)
     copied: list[str] = []
@@ -304,17 +339,37 @@ def test_large_pasted_command_is_data_not_ui_command(tmp_path: Path) -> None:
     asyncio.run(scenario())
 
 
-def test_large_local_clipboard_paste_uses_collapsed_block(tmp_path: Path) -> None:
+def test_large_local_clipboard_paste_uses_collapsed_block(
+    monkeypatch, tmp_path: Path,
+) -> None:
     app, agent, _store = _app(tmp_path)
     pasted = "clipboard ✓\n" * 10_000
 
     async def scenario() -> None:
         async with app.run_test(size=(100, 32)):
             composer = app.query_one("#composer", Composer)
+            monkeypatch.setattr("hal.tui.os.name", "posix")
             app._clipboard = pasted
             composer.action_paste()
             assert composer.text.startswith("[Pasted block 1 · ")
             assert composer.expand_pastes(composer.text) == pasted
+            assert agent.prompts == []
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
+def test_windows_ctrl_v_uses_native_clipboard(monkeypatch, tmp_path: Path) -> None:
+    app, agent, _store = _app(tmp_path)
+    pasted = "native clipboard ✓"
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            monkeypatch.setattr("hal.tui.os.name", "nt")
+            monkeypatch.setattr("hal.tui.read_windows_unicode", lambda: pasted)
+            await pilot.press("ctrl+v")
+            composer = app.query_one("#composer", Composer)
+            assert composer.text == pasted
             assert agent.prompts == []
             app.action_safe_quit()
 
