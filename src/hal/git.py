@@ -73,6 +73,10 @@ class GitBackend(Protocol):
                cancellation: CancellationToken | None = None) -> str: ...
     def push(self, remote: str = "origin", branch: str = "",
              cancellation: CancellationToken | None = None) -> str: ...
+    def checkout(self, target: str, create: bool = False,
+                 cancellation: CancellationToken | None = None) -> str: ...
+    def show(self, ref: str, path: str | None = None,
+             cancellation: CancellationToken | None = None) -> str: ...
 
 
 def _decode(value: bytes | str) -> str:
@@ -237,6 +241,23 @@ class NativeGitBackend:
             raise GitError("cannot push a detached HEAD without an explicit branch")
         self._run(["push", "--", remote, branch], cancellation)
         return f"pushed {branch} to {remote}"
+
+    def checkout(self, target: str, create: bool = False,
+                 cancellation: CancellationToken | None = None) -> str:
+        self._require_repository(cancellation)
+        arguments = ["checkout"]
+        if create:
+            arguments.append("-b")
+        arguments.append(target)
+        self._run(arguments, cancellation)
+        return self.status(cancellation).branch
+
+    def show(self, ref: str, path: str | None = None,
+             cancellation: CancellationToken | None = None) -> str:
+        self._require_repository(cancellation)
+        spec = f"{ref}:{path}" if path else ref
+        result = self._run(["show", spec], cancellation)
+        return result.stdout
 
 
 class DulwichGitBackend:
@@ -413,6 +434,71 @@ class DulwichGitBackend:
             raise GitError(detail or str(exc)) from exc
         cancellation.raise_if_cancelled()
         return f"pushed {branch} to {remote}"
+
+    def checkout(self, target: str, create: bool = False,
+                 cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
+        with self._repo() as repo:
+            try:
+                if create:
+                    porcelain.checkout(repo, target=b"HEAD", new_branch=target.encode("utf-8"))
+                else:
+                    porcelain.checkout(repo, target=target.encode("utf-8"))
+            except CancelledError:
+                raise
+            except Exception as exc:
+                raise GitError(f"could not checkout '{target}': {exc}") from exc
+        cancellation.raise_if_cancelled()
+        return self.status(cancellation).branch
+
+    def show(self, ref: str, path: str | None = None,
+             cancellation: CancellationToken | None = None) -> str:
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
+        output = BoundedOutput(DEFAULT_OUTPUT_LIMIT)
+        try:
+            with self._repo() as repo:
+                if path:
+                    encoded_ref = ref.encode("utf-8") if isinstance(ref, str) else ref
+                    encoded_path = path.encode("utf-8") if isinstance(path, str) else path
+                    commit_sha: bytes | None = None
+                    for candidate in [
+                        encoded_ref,
+                        b"refs/heads/" + encoded_ref,
+                        b"refs/tags/" + encoded_ref,
+                        b"refs/remotes/" + encoded_ref,
+                    ]:
+                        try:
+                            commit_sha = repo.refs[candidate]
+                            break
+                        except KeyError:
+                            pass
+                    if commit_sha is None:
+                        try:
+                            obj = repo[encoded_ref]
+                            commit_sha = obj.id
+                        except KeyError:
+                            pass
+                    if commit_sha is None:
+                        raise GitError(f"unknown ref: {ref}")
+                    commit = repo[commit_sha]
+                    tree = repo[commit.tree]
+                    try:
+                        _mode, sha = tree.lookup_path(repo.object_store.__getitem__, encoded_path)
+                    except KeyError as exc:
+                        raise GitError(f"path not found in '{ref}': {path}") from exc
+                    blob = repo[sha]
+                    output.write(blob.data.decode("utf-8", "replace"))
+                else:
+                    encoded_ref = ref.encode("utf-8") if isinstance(ref, str) else ref
+                    porcelain.show(repo, objects=[encoded_ref], outstream=output)
+        except (GitError, CancelledError):
+            raise
+        except Exception as exc:
+            raise GitError(str(exc)) from exc
+        cancellation.raise_if_cancelled()
+        return output.text()
 
 
 def create_git_backend(root: Path, preference: str = "auto") -> GitBackend:

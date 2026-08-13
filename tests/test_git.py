@@ -14,11 +14,13 @@ from hal.git import (
     normalize_paths,
 )
 from hal.git_tools import (
+    GitCheckoutTool,
     GitCommitTool,
     GitDiffTool,
     GitInitTool,
     GitLogTool,
     GitPushTool,
+    GitShowTool,
     GitStageTool,
     GitUnstageTool,
 )
@@ -269,3 +271,97 @@ def test_git_tools_reject_malformed_scalar_arguments(tmp_path: Path) -> None:
         GitDiffTool(backend).run({"staged": "false"})
     with pytest.raises(ValueError, match="count must be"):
         GitLogTool(backend).run({"count": True})
+
+
+def test_dulwich_checkout_switches_branch(tmp_path: Path) -> None:
+    root = new_repo(tmp_path)
+    backend = DulwichGitBackend(root)
+    initial_branch = backend.status().branch
+    (root / "a.txt").write_text("content", encoding="utf-8")
+    backend.commit("Initial commit", ["a.txt"])
+
+    result = json.loads(GitCheckoutTool(backend).run({"target": "feature", "create": True}))
+
+    assert result["branch"] == "feature"
+    assert result["created"] is True
+    assert backend.status().branch == "feature"
+
+    result2 = json.loads(GitCheckoutTool(backend).run({"target": initial_branch}))
+    assert result2["branch"] == initial_branch
+    assert result2["created"] is False
+
+
+def test_native_checkout_switches_branch(tmp_path: Path) -> None:
+    executable = shutil.which("git")
+    if not executable:
+        pytest.skip("native Git is unavailable")
+    root = new_repo(tmp_path)
+    backend = NativeGitBackend(root, executable)
+    initial_branch = backend.status().branch
+    (root / "a.txt").write_text("content", encoding="utf-8")
+    backend.commit("Initial commit", ["a.txt"])
+
+    result = json.loads(GitCheckoutTool(backend).run({"target": "feature", "create": True}))
+
+    assert result["branch"] == "feature"
+    assert backend.status().branch == "feature"
+
+    json.loads(GitCheckoutTool(backend).run({"target": initial_branch}))
+    assert backend.status().branch == initial_branch
+
+
+def test_checkout_tool_rejects_invalid_target(tmp_path: Path) -> None:
+    backend = DulwichGitBackend(new_repo(tmp_path))
+    with pytest.raises(ValueError, match="must not begin"):
+        GitCheckoutTool(backend).run({"target": "-bad"})
+    with pytest.raises(ValueError, match="control characters"):
+        GitCheckoutTool(backend).run({"target": "br\nanch"})
+    with pytest.raises(ValueError, match="non-empty"):
+        GitCheckoutTool(backend).run({"target": "  "})
+
+
+def test_dulwich_show_displays_commit(tmp_path: Path) -> None:
+    root = new_repo(tmp_path)
+    backend = DulwichGitBackend(root)
+    (root / "readme.txt").write_text("hello world\n", encoding="utf-8")
+    backend.commit("Add readme", ["readme.txt"])
+
+    output = GitShowTool(backend).run({"ref": "HEAD"})
+
+    assert "Add readme" in output
+
+
+def test_dulwich_show_displays_file_at_ref(tmp_path: Path) -> None:
+    root = new_repo(tmp_path)
+    backend = DulwichGitBackend(root)
+    (root / "readme.txt").write_text("hello world\n", encoding="utf-8")
+    backend.commit("Add readme", ["readme.txt"])
+
+    output = GitShowTool(backend).run({"ref": "HEAD", "path": "readme.txt"})
+
+    assert "hello world" in output
+
+
+def test_native_show_displays_commit(tmp_path: Path) -> None:
+    executable = shutil.which("git")
+    if not executable:
+        pytest.skip("native Git is unavailable")
+    root = new_repo(tmp_path)
+    backend = NativeGitBackend(root, executable)
+    (root / "readme.txt").write_text("hello world\n", encoding="utf-8")
+    backend.commit("Add readme", ["readme.txt"])
+
+    output = GitShowTool(backend).run({"ref": "HEAD"})
+
+    assert "Add readme" in output
+
+
+def test_show_tool_rejects_sensitive_path(tmp_path: Path) -> None:
+    root = new_repo(tmp_path)
+    backend = DulwichGitBackend(root)
+    (root / ".env").write_text("SECRET=x", encoding="utf-8")
+    porcelain.add(root, paths=[".env"])
+    porcelain.commit(root, message=b"Add env")
+
+    with pytest.raises(ValueError, match="credentials"):
+        GitShowTool(backend).run({"ref": "HEAD", "path": ".env"})
