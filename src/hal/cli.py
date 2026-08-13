@@ -68,6 +68,35 @@ def _load(cwd: Path, err: TextIO) -> Config | None:
         print(f"config: {exc}", file=err); return None
 
 
+def _set_console_title_from_cwd() -> None:
+    """Best-effort Windows console title update based on the current folder.
+
+    On Windows, update the console window title to include the project name
+    derived from the current working directory. This is intentionally
+    conservative: failures are silently ignored and non-Windows platforms are
+    left unchanged.
+    """
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.SetConsoleTitleW.argtypes = [wintypes.LPCWSTR]
+        kernel32.SetConsoleTitleW.restype = wintypes.BOOL
+
+        cwd = os.getcwd().rstrip("/\\")
+        project = cwd.rsplit("\\", 1)[-1] if cwd else "-"
+        title = f"HAL · {project}"
+        # Ignore failures; this is a cosmetic enhancement only.
+        kernel32.SetConsoleTitleW(title)
+    except OSError:
+        # Some hosts (e.g. embedded consoles) may not expose a traditional
+        # console window; in those cases we simply leave the title alone.
+        return
+
+
 def _make_agent(config: Config, cwd: Path, session: Session | None = None, interactive: bool = False,
                 out: TextIO = sys.stdout, err: TextIO = sys.stderr,
                 event_handler: Callable[[Event], None] | None = None,
@@ -312,6 +341,7 @@ def run_tui_chat(stderr: TextIO, session_id: str | None = None) -> int:
                 _git_branch(target_cwd, target_cfg.git_backend),
             )
 
+        _set_console_title_from_cwd()
         return run_tui(
             agent, cfg, cwd, session, store, skills, phases,
             branch=_git_branch(cwd, cfg.git_backend), session_factory=make_session,
@@ -360,6 +390,7 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
         agent, skills, phases = _make_agent(cfg, cwd, session, interactive=True, out=stdout, err=stderr)
         if session is None:
             session = store.create(Metadata(cwd=str(cwd), model=cfg.model, provider=cfg.provider, openai_auth=cfg.openai_auth if cfg.provider == "openai" else ""))
+        _set_console_title_from_cwd()
         print(f"HAL · {cfg.provider}/{cfg.model} · {cwd}", file=stdout)
         print(f"“{startup_saying()}”", file=stdout)
         print("Type /help for commands; Ctrl-D or /exit to quit.", file=stdout)
@@ -406,6 +437,7 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
                     else: print(f"warning: saved working directory is unavailable: {saved}", file=stderr)
                     session, cwd, cfg = target, target_cwd, target_cfg
                     agent, skills, phases = target_agent, target_skills, target_phases
+                    _set_console_title_from_cwd()
                     print(
                         f"Resumed {short_session_id(session.metadata.id)} ({session.metadata.id}) · "
                         f"{cfg.provider}/{cfg.model} · {cwd}", file=stdout,
