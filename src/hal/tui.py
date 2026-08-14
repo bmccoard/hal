@@ -33,7 +33,8 @@ from .tools import BashTool
 from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
 
 
-_COLLAPSED_PASTE_CHARS = 8_192
+_COLLAPSED_PASTE_CHARS = 5_120
+_LARGE_PASTE_PROMPT = "You are about to paste text that is longer than 5 KiB. Do you wish to continue?"
 
 
 class Composer(TextArea):
@@ -49,7 +50,17 @@ class Composer(TextArea):
             return
         event.stop()
         event.prevent_default()
-        self._insert_paste(event.text)
+        text = event.text
+        if len(text) >= _COLLAPSED_PASTE_CHARS:
+            def on_confirm(confirmed: bool) -> None:
+                if confirmed:
+                    self._insert_paste(text)
+            self.app.push_screen(
+                ConfirmScreen(_LARGE_PASTE_PROMPT, confirm_label="Paste anyway", deny_label="Cancel"),
+                on_confirm,
+            )
+        else:
+            self._insert_paste(text)
 
     def action_paste(self) -> None:
         """Paste from the native clipboard, retaining Textual's fallback."""
@@ -205,16 +216,18 @@ class ConfirmScreen(ModalScreen[bool]):
     #confirm-buttons Button { margin-left: 1; }
     """
 
-    def __init__(self, prompt: str) -> None:
+    def __init__(self, prompt: str, confirm_label: str = "Allow", deny_label: str = "Deny") -> None:
         super().__init__()
         self.prompt = prompt
+        self.confirm_label = confirm_label
+        self.deny_label = deny_label
 
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm-dialog"):
             yield Static(self.prompt, id="confirm-prompt")
             with Horizontal(id="confirm-buttons"):
-                yield Button("Deny", id="deny")
-                yield Button("Allow", variant="warning", id="allow")
+                yield Button(self.deny_label, id="deny")
+                yield Button(self.confirm_label, variant="warning", id="allow")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         self.dismiss(event.button.id == "allow")
