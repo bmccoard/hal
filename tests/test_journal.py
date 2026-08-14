@@ -1,3 +1,4 @@
+import os
 import stat
 from pathlib import Path
 
@@ -47,7 +48,7 @@ def test_run_journal_round_trip_is_versioned_sanitized_and_private(
     assert payload["event_count"] == 9
     assert "final_text" not in payload
     assert "must-not-be-persisted" not in path.read_text(encoding="utf-8")
-    if hasattr(stat, "S_IMODE"):
+    if os.name == "posix":
         assert stat.S_IMODE(path.stat().st_mode) == 0o600
 
 
