@@ -110,6 +110,79 @@ token usage, verification summaries, and repair count.
 | `4` | Required verification failed after allowed repairs. |
 | `130` | Run cancelled. |
 
+### Worked example: build a blank project
+
+The harness can control a project from its first generated file. Create the demo in a
+standalone directory so HAL resolves that directory, rather than the root of an
+unrelated parent Git repository, as its workspace:
+
+```bash
+mkdir hal-harness-demo
+cd hal-harness-demo
+python -m venv .venv
+```
+
+Install HAL into the environment, or use an existing `hal` installation. For a local
+HAL checkout, an editable installation looks like this:
+
+```bash
+python -m pip install -e /path/to/hal
+```
+
+Create `hal.yaml` with the normal provider and model settings for the environment plus
+a bounded `change` capability. This example uses the standard-library test runner so
+the generated project needs no test dependency:
+
+```yaml
+provider: openrouter
+model: openai/gpt-4o-mini
+
+only_write_locally: true
+bash_policy: normal
+
+harness:
+  default_capability: change
+  budgets:
+    provider_calls: 20
+    tool_calls: 60
+    elapsed_seconds: 300
+    input_tokens: null
+    output_tokens: null
+  verification:
+    - name: tests
+      command: python -m unittest discover -v
+      timeout_seconds: 60
+      required: true
+  repair_attempts: 1
+```
+
+Keep the provider credential in the environment or an ignored `.env` file. Inspect
+the resolved boundary before contacting the model:
+
+```bash
+hal harness change --json
+```
+
+Then ask HAL to implement the project through the harness:
+
+```bash
+hal run --json "Build a dependency-free Python calculator CLI. Create calculator.py with add, subtract, multiply, and divide operations and an argparse interface. Division by zero must print a clear error and exit nonzero. Create test_calculator.py using unittest with tests for every operation and division by zero. Create a concise README.md with usage examples. Do not modify hal.yaml."
+```
+
+The model creates the files through the resolved tool policy. HAL then runs the
+configured test command, permits at most one repair turn if the required check fails,
+and returns a structured receipt. A successful result can be checked normally:
+
+```bash
+python -m unittest discover -v
+python calculator.py add 10 5
+python calculator.py divide 10 0
+```
+
+In one observed run of this example, HAL completed with 7 provider calls and 8 tool
+calls, all 18 generated tests passed, and no repair attempt was needed. Those counts
+are illustrative rather than guaranteed because model behavior can vary.
+
 ### Custom capabilities
 
 Custom capabilities may narrow tools, protect existing files, and impose stricter
@@ -168,6 +241,26 @@ review -> review
 ```
 
 Workflow policies compose with the configured default and cannot weaken it.
+
+The harness and a workflow solve different problems and are designed to compose:
+
+- The **harness** bounds and records one agent run: permissions, budgets,
+  verification, repair, cancellation, and outcome.
+- A **workflow** divides a larger objective into ordered runs with different
+  instructions and capabilities.
+
+A single harnessed `hal run` is usually enough for a small, well-scoped change. For a
+larger feature, use the `feature` workflow so inspection, planning, implementation,
+and review happen as separate bounded phases. Each phase remains subject to the
+configured harness restrictions; the workflow cannot broaden them.
+
+For a substantially more complicated application, treat the project as a sequence of
+testable milestones rather than one enormous model turn. Run the feature workflow for
+one vertical slice at a time, keep deterministic verification in `hal.yaml`, and tune
+budgets to the size of a phase. This improves failure isolation and leaves a distinct
+outcome for each bounded run. A workflow is helpful for this structure, but it is not
+technically required: direct `hal run` calls can also be orchestrated by a person or
+an external system while retaining the same harness controls.
 
 ### Trusted verification and repair
 
