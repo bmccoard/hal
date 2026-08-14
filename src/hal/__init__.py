@@ -8,6 +8,7 @@ from .agent import (
     MaxOutputTokensError,
     MaxTurnsError,
     UnexpectedStopReasonError,
+    VerificationError,
 )
 from .config import Config, load_config
 from .harness import (
@@ -18,10 +19,15 @@ from .harness import (
     RunCounters,
     RunOutcome,
     RunStatus,
+    SubagentProfile,
     ToolPolicy,
+    compose_run_budgets,
     compose_tool_policy,
     resolve_capability,
 )
+from .verification import VerificationCheck, VerificationResult, VerificationStatus
+from .journal import JOURNAL_VERSION, RunJournalStore
+from .tools import ToolEffect
 
 __all__ = [
     "Agent",
@@ -34,12 +40,21 @@ __all__ = [
     "ContextWindowExceededError",
     "MaxOutputTokensError",
     "MaxTurnsError",
+    "JOURNAL_VERSION",
     "RunBudgets",
     "RunCounters",
     "RunOutcome",
+    "RunJournalStore",
     "RunStatus",
+    "SubagentProfile",
     "ToolPolicy",
+    "ToolEffect",
     "UnexpectedStopReasonError",
+    "VerificationCheck",
+    "VerificationError",
+    "VerificationResult",
+    "VerificationStatus",
+    "compose_run_budgets",
     "compose_tool_policy",
     "load_config",
     "resolve_capability",

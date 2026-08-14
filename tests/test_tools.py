@@ -16,6 +16,7 @@ from hal.tools import (
     WriteFileTool,
     Registry,
     Tool,
+    ToolEffect,
     default_registry,
     shell_argv,
 )
@@ -270,3 +271,38 @@ def test_bash_policy_denies_without_approval(tmp_path: Path, policy: str) -> Non
 
     with pytest.raises(PermissionError, match="bash"):
         registry.run("bash", {"command": "printf should-not-run"})
+
+
+def test_parallel_safety_respects_tool_policy_and_approval_barriers(tmp_path: Path) -> None:
+    registry = Registry(
+        [ReadFileTool(), BashTool(tmp_path)], approvals=["read_file"], cwd=tmp_path,
+    )
+
+    assert registry.is_parallel_safe("read_file") is False
+    registry.approvals.clear()
+    assert registry.is_parallel_safe("read_file") is True
+    assert registry.is_parallel_safe("read_file", denied={"read_file"}) is False
+    assert registry.is_parallel_safe("read_file", allowed={"bash"}) is False
+    assert registry.is_parallel_safe("bash") is False
+    assert registry.is_parallel_safe("missing") is False
+
+
+def test_registry_exposes_resolved_tool_effect_metadata(tmp_path: Path) -> None:
+    registry = Registry(
+        [ReadFileTool(), WriteFileTool(), BashTool(tmp_path)],
+        approvals=["read_file"], bash_policy="approve", cwd=tmp_path,
+    )
+
+    assert registry.metadata("read_file") == {
+        "effect": ToolEffect.READ_ONLY.value,
+        "parallel_safe": True,
+        "approval_gated": True,
+    }
+    assert registry.metadata("write_file")["effect"] == "mutating"
+    assert registry.metadata("bash") == {
+        "effect": "external",
+        "parallel_safe": False,
+        "approval_gated": True,
+    }
+    with pytest.raises(ValueError, match="unknown tool"):
+        registry.metadata("missing")

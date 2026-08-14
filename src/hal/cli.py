@@ -17,12 +17,14 @@ from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
 from .extensions import load_extensions
 from .git import GitError, create_git_backend
-from .harness import resolve_capability
+from .harness import compose_run_budgets, compose_tool_policy, resolve_capability
 from .providers import ProviderError, create_provider
 from .sayings import startup_saying
 from .sessions import Metadata, Session, SessionStore, short_session_id
+from .journal import RunJournalStore
 from .tools import BashTool, default_registry, workspace_root
 from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
+from .subagents import DelegateTool
 
 
 USAGE = """HAL — a Python coding agent
@@ -38,6 +40,8 @@ USAGE:
   hal sessions search <query>
                      Search saved session transcripts
   hal doctor         Check local config and environment
+  hal harness [name] [--json]
+                     Inspect resolved harness policy without starting a model run
   hal resume <selector>
                      Resume by full ID or unique short selector
   hal version        Show the HAL version (also -v, --version)
@@ -124,20 +128,116 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
         except (EOFError, KeyboardInterrupt): return False
 
     root = workspace_root(cwd)
-    registry = default_registry(
-        cwd, root, config.tool_approvals if interactive else None,
-        (confirm_handler or confirm) if interactive else None, config.git_backend,
-        config.only_write_locally, config.bash_policy,
+    registry = _make_registry(
+        config, cwd, root, interactive,
+        (confirm_handler or confirm) if interactive else None,
     )
-    load_extensions(registry, config.extensions, cwd, root, config.extension_config)
     agent = Agent(provider, config.model, system, registry,
                   messages=session.messages if session else None, usage=session.usage if session else None,
                   on_event=event_handler or event, budgets=config.harness_budgets,
                   capability=(
-                      resolve_capability(config.default_capability)
+                      resolve_capability(config.default_capability, config.capabilities)
                       if config.default_capability else None
-                  ))
+                  ), verification_checks=config.verification_checks,
+                  workspace=root, repair_attempts=config.repair_attempts,
+                  journal_store=RunJournalStore(SessionStore().directory / "runs"))
+    registry.bind_agent(agent)
     return agent, skills, phases
+
+
+def _make_registry(
+    config: Config, cwd: Path, root: Path, interactive: bool = False,
+    confirm_handler: Callable[[str], bool] | None = None,
+):
+    registry = default_registry(
+        cwd, root, config.tool_approvals if interactive else None,
+        confirm_handler if interactive else None, config.git_backend,
+        config.only_write_locally, config.bash_policy,
+    )
+    if config.subagents:
+        registry.extend([DelegateTool(config.subagents)])
+    load_extensions(registry, config.extensions, cwd, root, config.extension_config)
+    registry_tools = {spec.name for spec in registry.specs}
+    for capability in config.capabilities.values():
+        referenced = set(capability.allowed_tools or ()) | set(capability.denied_tools)
+        unknown = referenced - registry_tools
+        if unknown:
+            names = ", ".join(sorted(unknown))
+            raise ValueError(
+                f"capability {capability.name!r} references unknown tool(s): {names}"
+            )
+    return registry
+
+
+def run_harness(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
+    json_output = "--json" in args
+    names = [item for item in args if item != "--json"]
+    if len(names) > 1 or any(item.startswith("-") for item in names):
+        print("usage: hal harness [capability] [--json]", file=stderr)
+        return 2
+    cwd = Path.cwd()
+    config = _load(cwd, stderr)
+    if config is None:
+        return 1
+    name = names[0] if names else (config.default_capability or "change")
+    try:
+        capability = resolve_capability(name, config.capabilities)
+        root = workspace_root(cwd)
+        registry = _make_registry(config, cwd, root)
+        policy = compose_tool_policy(capability)
+        budgets = compose_run_budgets(config.harness_budgets, capability.budgets)
+        available = [
+            spec.name for spec in registry.specs_for(
+                None if policy.allowed_tools is None else set(policy.allowed_tools),
+                set(policy.denied_tools),
+            )
+        ]
+        payload = {
+            "capability": capability.name,
+            "description": capability.description,
+            "workspace": str(root),
+            "available_tools": available,
+            "tool_metadata": {
+                tool_name: registry.metadata(tool_name)
+                for tool_name in available
+            },
+            "allowed_tools": (
+                sorted(policy.allowed_tools)
+                if policy.allowed_tools is not None else None
+            ),
+            "denied_tools": sorted(policy.denied_tools),
+            "protect_existing_files": policy.protect_existing_files,
+            "budgets": (
+                {
+                    field: getattr(budgets, field)
+                    for field in (
+                        "provider_calls", "tool_calls", "elapsed_seconds",
+                        "input_tokens", "output_tokens",
+                    )
+                }
+                if budgets is not None else None
+            ),
+            "verification": [check.name for check in config.verification_checks],
+            "repair_attempts": config.repair_attempts,
+            "bash_policy": config.bash_policy,
+            "only_write_locally": config.only_write_locally,
+            "tool_approvals": list(config.tool_approvals),
+        }
+    except (OSError, ValueError) as exc:
+        print(f"harness: {exc}", file=stderr)
+        return 1
+    if json_output:
+        print(json.dumps(payload, indent=2), file=stdout)
+    else:
+        print(f"Capability: {payload['capability']} — {payload['description']}", file=stdout)
+        print(f"Workspace: {payload['workspace']}", file=stdout)
+        print(f"Available tools: {', '.join(available) or 'none'}", file=stdout)
+        print(f"Denied tools: {', '.join(payload['denied_tools']) or 'none'}", file=stdout)
+        print(f"Protect existing files: {str(policy.protect_existing_files).lower()}", file=stdout)
+        print(f"Budgets: {json.dumps(payload['budgets'], sort_keys=True)}", file=stdout)
+        print(f"Verification: {', '.join(payload['verification']) or 'none'}", file=stdout)
+        print(f"Repair attempts: {config.repair_attempts}", file=stdout)
+    return 0
 
 
 def run_headless(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO) -> int:
@@ -158,6 +258,7 @@ def run_headless(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO)
     if cfg is None: return 1
     calls = errors = 0
     result: dict[str, object] = {"ok": False, "elapsed_ms": 0, "provider": cfg.provider, "model": cfg.model, "tool_calls": 0, "tool_errors": 0}
+    agent: Agent | None = None
     try:
         cancellation = CancellationToken.with_timeout(options.timeout)
         agent, _, _ = _make_agent(cfg, cwd, err=stderr)
@@ -170,11 +271,48 @@ def run_headless(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO)
         result.update(ok=True, final=final)
     except (CancelledError, ProviderError, OSError, ValueError, RuntimeError) as exc:
         result["error"] = str(exc)
+    outcome = getattr(agent, "last_outcome", None)
+    if outcome is not None:
+        counters = outcome.counters
+        result["harness"] = {
+            "run_id": outcome.run_id,
+            "status": outcome.status.value,
+            "reason": outcome.reason,
+            "capability": outcome.capability,
+            "provider_calls": counters.provider_calls,
+            "tool_calls": counters.tool_calls,
+            "elapsed_seconds": counters.elapsed_seconds,
+            "input_tokens": counters.usage.input_tokens,
+            "output_tokens": counters.usage.output_tokens,
+            "repair_attempts": outcome.repair_attempts,
+            "verification": [
+                {
+                    "name": item.name,
+                    "status": item.status.value,
+                    "passed": item.passed,
+                    "required": item.required,
+                    "duration_ms": item.duration_ms,
+                    "returncode": item.returncode,
+                }
+                for item in outcome.verification
+            ],
+        }
     result.update(elapsed_ms=int((time.monotonic() - started) * 1000), tool_calls=calls, tool_errors=errors)
     if options.json_output: print(json.dumps(result), file=stdout)
     elif result["ok"]: print(result.get("final", ""), file=stdout)
     else: print(f"hal run: {result.get('error', 'failed')}", file=stderr)
-    return 0 if result["ok"] else 1
+    if result["ok"]:
+        return 0
+    harness = result.get("harness")
+    status = harness.get("status") if isinstance(harness, dict) else ""
+    reason = harness.get("reason") if isinstance(harness, dict) else ""
+    if status == "cancelled":
+        return 130
+    if status == "budget_exhausted":
+        return 3
+    if reason == "verification_failed":
+        return 4
+    return 1
 
 
 def _short(path: str) -> str:
@@ -273,11 +411,18 @@ def _tui_supported(stdin: TextIO, stdout: TextIO) -> bool:
     """Use the full-screen UI only on a real, capable terminal."""
     if os.environ.get("HAL_NO_TUI", "").strip().lower() in {"1", "true", "yes"}:
         return False
-    return bool(
+    interactive = bool(
         getattr(stdin, "isatty", lambda: False)()
         and getattr(stdout, "isatty", lambda: False)()
-        and os.environ.get("TERM", "").lower() != "dumb"
     )
+    if not interactive:
+        return False
+    try:
+        stdout.fileno()
+        real_terminal = True
+    except (AttributeError, OSError, ValueError):
+        real_terminal = False
+    return not real_terminal or os.environ.get("TERM", "").lower() != "dumb"
 
 
 def _missing_tui_dependencies() -> list[str]:
@@ -360,6 +505,17 @@ def _run_interactive(
     stdin: TextIO, stdout: TextIO, stderr: TextIO,
     session_id: str | None = None, *, require_tui: bool = False,
 ) -> int:
+    explicitly_disabled = os.environ.get("HAL_NO_TUI", "").strip().lower() in {
+        "1", "true", "yes",
+    }
+    if not explicitly_disabled and (missing := _missing_tui_dependencies()):
+        names = ", ".join(missing)
+        guidance = "run 'python -m pip install -e \".[tui]\"' to install the TUI dependencies"
+        if require_tui:
+            print(f"hal tui: missing {names}; {guidance}", file=stderr)
+            return 1
+        print(f"warning: TUI unavailable (missing {names}); using basic REPL; {guidance}", file=stderr)
+        return run_chat(stdout, stderr, session_id)
     if not _tui_supported(stdin, stdout):
         if require_tui:
             print(
@@ -368,14 +524,6 @@ def _run_interactive(
                 file=stderr,
             )
             return 1
-        return run_chat(stdout, stderr, session_id)
-    if missing := _missing_tui_dependencies():
-        names = ", ".join(missing)
-        guidance = "run 'python -m pip install -e \".[tui]\"' to install the TUI dependencies"
-        if require_tui:
-            print(f"hal tui: missing {names}; {guidance}", file=stderr)
-            return 1
-        print(f"warning: TUI unavailable (missing {names}); using basic REPL; {guidance}", file=stderr)
         return run_chat(stdout, stderr, session_id)
     return run_tui_chat(stderr, session_id)
 
@@ -518,6 +666,7 @@ def main(argv: list[str] | None = None, stdin: TextIO = sys.stdin, stdout: TextI
     if command == "run": return run_headless(rest, stdin, stdout, stderr)
     if command == "sessions": return run_sessions(rest, stdout, stderr)
     if command == "doctor": return run_doctor(stdout)
+    if command == "harness": return run_harness(rest, stdout, stderr)
     if command == "resume":
         if not rest: print("usage: hal resume <short-id-or-full-id>", file=stderr); return 2
         if len(rest) > 1: print("usage: hal resume <short-id-or-full-id>", file=stderr); return 2

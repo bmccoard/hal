@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from hal.config import load_config, load_dotenv, parse_config
-from hal.harness import RunBudgets
+from hal.harness import Capability, RunBudgets, SubagentProfile
+from hal.verification import VerificationCheck
 
 
 def test_config_uses_first_hit_and_provider_default(tmp_path: Path) -> None:
@@ -100,6 +101,42 @@ def test_harness_budget_defaults_and_null_limits() -> None:
     )
 
 
+def test_harness_verification_checks_are_parsed_and_validated() -> None:
+    config = parse_config({"harness": {"repair_attempts": 2, "verification": [
+        {"name": "tests", "command": "pytest -q"},
+        {
+            "name": "lint", "command": "ruff check .",
+            "timeout_seconds": 30, "required": False,
+        },
+    ]}})
+
+    assert config.verification_checks == [
+        VerificationCheck("tests", "pytest -q"),
+        VerificationCheck("lint", "ruff check .", 30, False),
+    ]
+    assert config.repair_attempts == 2
+
+    with pytest.raises(ValueError, match="harness.verification must be a list"):
+        parse_config({"harness": {"verification": {"name": "tests"}}})
+    with pytest.raises(ValueError, match="unknown harness.verification.*setting"):
+        parse_config({"harness": {"verification": [
+            {"name": "tests", "command": "pytest", "shell": "bash"},
+        ]}})
+    with pytest.raises(ValueError, match="command must not be empty"):
+        parse_config({"harness": {"verification": [
+            {"name": "tests", "command": ""},
+        ]}})
+    with pytest.raises(ValueError, match="names must be unique"):
+        parse_config({"harness": {"verification": [
+            {"name": "tests", "command": "first"},
+            {"name": "tests", "command": "second"},
+        ]}})
+    with pytest.raises(ValueError, match="repair_attempts must be a non-negative"):
+        parse_config({"harness": {"repair_attempts": -1}})
+    with pytest.raises(ValueError, match="repair_attempts must be a non-negative"):
+        parse_config({"harness": {"repair_attempts": True}})
+
+
 @pytest.mark.parametrize("data,message", [
     ({"harness": "bounded"}, "harness must be a mapping"),
     ({"harness": {"budgets": 10}}, "harness.budgets must be a mapping"),
@@ -108,6 +145,82 @@ def test_harness_budget_defaults_and_null_limits() -> None:
     ({"harness": {"budgets": {"tool_calls": 0}}}, "tool_calls must be a positive"),
 ])
 def test_harness_configuration_rejects_unsafe_or_unknown_values(data, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_config(data)
+
+
+def test_custom_capabilities_parse_tools_and_budgets_monotonically() -> None:
+    config = parse_config({"harness": {
+        "default_capability": "docs",
+        "capabilities": {
+            "docs": {
+                "description": "Edit documentation only",
+                "allowed_tools": ["read_file", "write_file"],
+                "denied_tools": ["bash"],
+                "protect_existing_files": True,
+                "budgets": {"provider_calls": 3, "tool_calls": 5},
+            },
+        },
+    }})
+
+    assert config.capabilities["docs"] == Capability(
+        "docs", "Edit documentation only",
+        frozenset({"read_file", "write_file"}), frozenset({"bash"}), True,
+        RunBudgets(provider_calls=3, tool_calls=5),
+    )
+    assert config.default_capability == "docs"
+
+
+@pytest.mark.parametrize("data,message", [
+    ({"harness": {"capabilities": []}}, "capabilities must be a mapping"),
+    ({"harness": {"capabilities": {"inspect": {}}}}, "cannot be redefined"),
+    ({"harness": {"capabilities": {"bad name": {}}}}, "invalid capability name"),
+    ({"harness": {"capabilities": {"docs": {"allowed_tools": "read_file"}}}}, "allowed_tools must be a list"),
+    ({"harness": {"capabilities": {"docs": {"budgets": {"provider_calls": 0}}}}}, "provider_calls must be a positive"),
+])
+def test_custom_capabilities_reject_invalid_policy(data, message) -> None:
+    with pytest.raises(ValueError, match=message):
+        parse_config(data)
+
+
+def test_subagent_profiles_bind_trusted_capability_model_and_budgets() -> None:
+    config = parse_config({
+        "harness": {"capabilities": {
+            "research": {"allowed_tools": ["read_file"]},
+        }},
+        "subagents": {
+            "researcher": {
+                "description": "Inspect relevant code",
+                "model": "small-model",
+                "capability": "research",
+                "budgets": {
+                    "provider_calls": 4, "tool_calls": 6,
+                    "elapsed_seconds": 30,
+                },
+            },
+            "legacy": "legacy-model",
+        },
+    })
+
+    profile = config.subagents["researcher"]
+    assert profile == SubagentProfile(
+        "researcher", config.capabilities["research"],
+        RunBudgets(provider_calls=4, tool_calls=6, elapsed_seconds=30),
+        "small-model", "Inspect relevant code",
+    )
+    assert config.subagents["legacy"].capability.name == "inspect"
+    assert config.subagents["legacy"].model == "legacy-model"
+    assert config.subagents["legacy"].budgets.provider_calls == 10
+
+
+@pytest.mark.parametrize("data,message", [
+    ({"subagents": []}, "subagents must be a mapping"),
+    ({"subagents": {"bad name": "model"}}, "invalid subagent profile name"),
+    ({"subagents": {"child": {"capability": "missing"}}}, "unknown capability"),
+    ({"subagents": {"child": {"tools": []}}}, "unknown subagents.child setting"),
+    ({"subagents": {"child": {"budgets": {"provider_calls": 0}}}}, "provider_calls must be a positive"),
+])
+def test_subagent_profiles_reject_untrusted_or_invalid_settings(data, message) -> None:
     with pytest.raises(ValueError, match=message):
         parse_config(data)
 

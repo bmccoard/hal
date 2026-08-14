@@ -99,7 +99,10 @@ def run_workflow(
             f"/workflow {workflow.name} [{name}] {request}",
             cancellation,
             include_history=False,
-            capability=resolve_capability(_PHASE_CAPABILITIES.get(name, "inspect")),
+            capability=(
+                phase.capability
+                or resolve_capability(_PHASE_CAPABILITIES.get(name, "inspect"))
+            ),
         )
         if not result.strip():
             raise RuntimeError(

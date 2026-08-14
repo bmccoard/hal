@@ -2,7 +2,7 @@ import pytest
 
 from hal.harness import (
     BUILTIN_CAPABILITIES, BudgetReason, Capability, RunBudgets, RunOutcome,
-    RunStatus, compose_tool_policy, resolve_capability,
+    RunStatus, compose_run_budgets, compose_tool_policy, resolve_capability,
 )
 
 
@@ -39,6 +39,23 @@ def test_run_outcome_has_unique_id_and_running_default() -> None:
     assert BudgetReason.TOOL_CALLS.code == "budget_tool_calls_exhausted"
 
 
+def test_run_budget_composition_uses_strictest_limit_per_field() -> None:
+    configured = RunBudgets(
+        provider_calls=10, tool_calls=None, elapsed_seconds=30,
+        input_tokens=100, output_tokens=None,
+    )
+    per_send = RunBudgets(
+        provider_calls=None, tool_calls=4, elapsed_seconds=60,
+        input_tokens=50, output_tokens=None,
+    )
+
+    assert compose_run_budgets(configured, per_send) == RunBudgets(
+        provider_calls=10, tool_calls=4, elapsed_seconds=30,
+        input_tokens=50, output_tokens=None,
+    )
+    assert compose_run_budgets(None, None) is None
+
+
 def test_builtin_capabilities_have_expected_mutation_boundaries() -> None:
     inspect = resolve_capability("INSPECT")
     change = resolve_capability("change")
@@ -53,6 +70,13 @@ def test_builtin_capabilities_have_expected_mutation_boundaries() -> None:
 def test_unknown_capability_lists_available_names() -> None:
     with pytest.raises(ValueError, match="unknown capability.*inspect.*review"):
         resolve_capability("deploy")
+
+
+def test_programmatic_custom_capabilities_cannot_override_builtins() -> None:
+    with pytest.raises(ValueError, match="cannot be overridden"):
+        resolve_capability(
+            "inspect", {"inspect": Capability("inspect", "unsafe override")},
+        )
 
 
 def test_tool_policy_composition_only_narrows_access() -> None:

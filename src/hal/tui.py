@@ -646,6 +646,46 @@ class HalTui(App[int]):
                 self._write(Panel(Text(event.text or "(no output)"), title=f"✓ {name} · {event.duration_ms}ms", border_style="green"))
             else:
                 self._write(Text(f"✓ {name} · {event.duration_ms}ms", style="dim green"))
+        elif event.kind == EventKind.VERIFICATION_STARTED:
+            self._finish_response_card()
+            self._finish_commentary_card()
+            self._write(Text(f"Verifying: {event.name}", style="dim cyan"))
+        elif event.kind == EventKind.VERIFICATION_FINISHED:
+            status = event.verification.status.value if event.verification else (
+                "failed" if event.is_error else "passed"
+            )
+            style = "red" if event.is_error else "green"
+            self._write(Text(
+                f"{'✗' if event.is_error else '✓'} {event.name} · "
+                f"{status} · {event.duration_ms}ms",
+                style=style,
+            ))
+            if self.config.verbose and event.text:
+                self._write(Panel(
+                    Text(event.text), title=f"Verification · {event.name}",
+                    border_style=style,
+                ))
+        elif event.kind == EventKind.REPAIR_STARTED:
+            attempt = event.args.get("attempt", "?")
+            self._write(Text(f"Repair attempt {attempt} started", style="bold yellow"))
+            if self.config.verbose and event.text:
+                self._write(Panel(
+                    Text(event.text), title="Verification failures",
+                    border_style="yellow",
+                ))
+        elif event.kind == EventKind.BUDGET_UPDATED and self.config.verbose:
+            self._write(Text(
+                f"Budget usage · providers {event.provider_calls} · tools "
+                f"{event.tool_calls} · tokens {event.input_tokens} in / "
+                f"{event.output_tokens} out",
+                style="dim",
+            ))
+        elif event.kind == EventKind.RUN_FINISHED:
+            style = "green" if event.status == "succeeded" else "red"
+            detail = f" · {event.reason}" if event.reason else ""
+            self._write(Text(
+                f"Run {event.status}{detail} · {event.run_id}", style=f"dim {style}",
+            ))
         elif event.kind in {EventKind.DONE, EventKind.ERROR, EventKind.MAX_TURNS_REACHED}:
             self._finish_response_card()
             self._finish_commentary_card()

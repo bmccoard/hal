@@ -8,6 +8,7 @@ from typing import Any
 from .cancellation import CancellationToken
 from .git import GitBackend, create_git_backend, normalize_paths
 from .models import ToolSpec
+from .tools import ToolEffect
 
 
 def sensitive_git_paths(paths: list[str]) -> list[str]:
@@ -35,6 +36,7 @@ def _reject_sensitive(paths: list[str], action: str) -> None:
 
 class GitInitTool:
     parallel_safe = False
+    effect = ToolEffect.MUTATING
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -60,6 +62,7 @@ class GitInitTool:
 
 class GitStageTool:
     parallel_safe = False
+    effect = ToolEffect.MUTATING
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -88,6 +91,7 @@ class GitStageTool:
 
 class GitUnstageTool:
     parallel_safe = False
+    effect = ToolEffect.MUTATING
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -115,6 +119,7 @@ class GitUnstageTool:
 
 class GitStatusTool:
     parallel_safe = True
+    effect = ToolEffect.READ_ONLY
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -134,6 +139,7 @@ class GitStatusTool:
 
 class GitDiffTool:
     parallel_safe = True
+    effect = ToolEffect.READ_ONLY
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -204,6 +210,7 @@ class GitDiffTool:
 
 class GitLogTool:
     parallel_safe = True
+    effect = ToolEffect.READ_ONLY
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -229,6 +236,7 @@ class GitLogTool:
 
 class GitCommitTool:
     parallel_safe = False
+    effect = ToolEffect.MUTATING
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -267,6 +275,7 @@ class GitCommitTool:
 
 class GitPushTool:
     parallel_safe = False
+    effect = ToolEffect.MUTATING
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -303,6 +312,7 @@ class GitPushTool:
 
 class GitCheckoutTool:
     parallel_safe = False
+    effect = ToolEffect.MUTATING
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend
@@ -342,6 +352,7 @@ class GitCheckoutTool:
 
 class GitShowTool:
     parallel_safe = True
+    effect = ToolEffect.READ_ONLY
 
     def __init__(self, backend: GitBackend) -> None:
         self.backend = backend

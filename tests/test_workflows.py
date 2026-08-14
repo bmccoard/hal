@@ -3,6 +3,7 @@ import pytest
 from hal.cancellation import CancellationToken
 from hal.config import Config
 from hal.context import resolve_phases
+from hal.harness import Capability
 from hal.workflows import WORKFLOWS, parse_workflow_command, run_workflow
 
 
@@ -74,6 +75,27 @@ def test_workflow_bounds_phase_handoffs() -> None:
 
     assert "[handoff truncated]" in prompts[1]
     assert "x" * 4_001 not in prompts[1]
+
+
+def test_configured_phase_can_select_custom_capability() -> None:
+    calls = []
+
+    class Agent:
+        def send(self, *_args, **kwargs):
+            calls.append(kwargs["capability"])
+            return "ok"
+
+    config = Config(
+        phases={"build": {"capability": "docs"}},
+        capabilities={"docs": Capability("docs", "docs")},
+    )
+
+    run_workflow(
+        Agent(), WORKFLOWS["feature"], "change", resolve_phases(config),
+        CancellationToken(),
+    )
+
+    assert calls[2].name == "docs"
 
 
 def test_workflow_stops_after_step_failure() -> None:

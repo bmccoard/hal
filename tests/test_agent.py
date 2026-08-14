@@ -1,4 +1,6 @@
+import itertools
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -19,6 +21,7 @@ from hal.agent import (
 )
 from hal.cancellation import CancelledError, CancellationToken
 from hal.harness import Capability, RunBudgets, RunStatus, resolve_capability
+from hal.journal import RunJournalStore
 from hal.models import ContentBlock, Response, StreamDelta, ToolSpec, Usage
 from hal.tools import Registry, Tool, default_registry
 
@@ -89,6 +92,57 @@ class NoopTool(Tool):
         return "ok"
 
 
+class ParallelTool(Tool):
+    parallel_safe = True
+
+    def __init__(self, name: str, barrier: threading.Barrier) -> None:
+        self.name = name
+        self.barrier = barrier
+
+    @property
+    def spec(self):
+        return ToolSpec(self.name, self.name, {"type": "object"})
+
+    def run(self, arguments, cancellation=None):
+        self.barrier.wait(timeout=1)
+        return f"{self.name}-done"
+
+
+class FastParallelTool(Tool):
+    parallel_safe = True
+
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    @property
+    def spec(self):
+        return ToolSpec(self.name, self.name, {"type": "object"})
+
+    def run(self, arguments, cancellation=None):
+        return f"{self.name}-done"
+
+
+class SubagentTool(Tool):
+    def __init__(self, child_provider) -> None:
+        self.parent = None
+        self.child_provider = child_provider
+        self.child_outcome = None
+
+    @property
+    def spec(self):
+        return ToolSpec("delegate", "delegate", {"type": "object"})
+
+    def run(self, arguments, cancellation=None):
+        text, self.child_outcome = self.parent.run_subagent(
+            "inspect", resolve_capability("inspect"),
+            RunBudgets(
+                provider_calls=3, tool_calls=2, elapsed_seconds=None,
+            ),
+            provider=self.child_provider,
+        )
+        return text
+
+
 def test_agent_executes_tool_and_keeps_matching_result(tmp_path: Path) -> None:
     provider = FakeProvider()
     agent = Agent(provider, "model", "system", default_registry(tmp_path, tmp_path))
@@ -107,7 +161,8 @@ def test_agent_forwards_stream_deltas_without_reemitting_final_text() -> None:
 
     text = [event.text for event in events if event.kind == EventKind.ASSISTANT_TEXT]
     assert text == ["Hel", "lo"]
-    assert events[-1].kind == EventKind.DONE
+    assert events[-2].kind == EventKind.DONE
+    assert events[-1].kind == EventKind.RUN_FINISHED
 
 
 def test_agent_can_isolate_a_turn_without_discarding_saved_history() -> None:
@@ -185,7 +240,7 @@ def test_stream_failure_preserves_visible_partial_output() -> None:
 
     assert raised.value.partial_text == "Partial answer"
     assert [block.type for block in agent.messages[-1].content] == ["commentary", "text"]
-    assert events[-1].partial_text == "Partial answer"
+    assert events[-2].partial_text == "Partial answer"
 
 
 @pytest.mark.parametrize("calls, message", [
@@ -224,7 +279,7 @@ def test_event_handler_failure_does_not_abort_turn() -> None:
     )
 
     assert agent.send("start") == "Done."
-    assert len(agent.event_errors) == 2
+    assert len(agent.event_errors) == 4
 
 
 def test_unknown_failed_and_denied_calls_get_ordered_error_results() -> None:
@@ -248,6 +303,200 @@ def test_unknown_failed_and_denied_calls_get_ordered_error_results() -> None:
     assert "unknown tool" in results[0].content
     assert "tool failed" in results[1].content
     assert "denied" in results[2].content
+
+
+def test_tool_batch_transcript_invariant_across_failure_permutations() -> None:
+    """Every announced call gets exactly one ordered result for mixed failures."""
+    for names in itertools.product(("noop", "fail", "missing"), repeat=3):
+        calls = [
+            ContentBlock(
+                "tool_use", id=f"call-{index}", name=name,
+                input={"value": index},
+            )
+            for index, name in enumerate(names, 1)
+        ]
+        provider = ScriptedProvider([
+            Response(calls, "tool_use"),
+            Response([ContentBlock("text", text="Done.")], "end_turn"),
+        ])
+        agent = Agent(
+            provider, "model", "system", Registry([NoopTool(), FailTool()]),
+        )
+
+        assert agent.send("start") == "Done."
+
+        results = agent.messages[-2].content
+        assert [item.tool_use_id for item in results] == [
+            "call-1", "call-2", "call-3",
+        ]
+        assert len(results) == len(calls)
+        assert all(item.type == "tool_result" for item in results)
+        for name, item in zip(names, results):
+            assert item.is_error is (name != "noop")
+
+
+def test_parallel_safe_batch_executes_concurrently_and_commits_in_order() -> None:
+    barrier = threading.Barrier(2)
+    provider = ScriptedProvider([
+        Response([
+            ContentBlock("tool_use", id="call-1", name="read_a", input={}),
+            ContentBlock("tool_use", id="call-2", name="read_b", input={}),
+        ], "tool_use"),
+        Response([ContentBlock("text", text="Done.")], "end_turn"),
+    ])
+    events: list[Event] = []
+    agent = Agent(
+        provider, "model", "system",
+        Registry([
+            ParallelTool("read_a", barrier), ParallelTool("read_b", barrier),
+        ]),
+        on_event=events.append,
+    )
+
+    assert agent.send("start") == "Done."
+
+    results = agent.messages[2].content
+    assert [item.tool_use_id for item in results] == ["call-1", "call-2"]
+    assert [item.content for item in results] == ["read_a-done", "read_b-done"]
+    result_events = [event for event in events if event.kind == EventKind.TOOL_RESULT]
+    assert [event.tool_use_id for event in result_events] == ["call-1", "call-2"]
+
+
+def test_approval_gated_parallel_safe_tools_remain_serial() -> None:
+    barrier = threading.Barrier(2)
+    tools = [ParallelTool("read_a", barrier), ParallelTool("read_b", barrier)]
+    registry = Registry(
+        tools, approvals=["read_a", "read_b"], confirm=lambda _prompt: False,
+    )
+    assert registry.is_parallel_safe("read_a") is False
+    assert registry.is_parallel_safe("read_b") is False
+
+
+def test_mixed_batch_parallelizes_adjacent_safe_group_before_serial_barrier() -> None:
+    barrier = threading.Barrier(2)
+    provider = ScriptedProvider([
+        Response([
+            ContentBlock("tool_use", id="call-1", name="read_a", input={}),
+            ContentBlock("tool_use", id="call-2", name="read_b", input={}),
+            ContentBlock("tool_use", id="call-3", name="noop", input={}),
+        ], "tool_use"),
+        Response([ContentBlock("text", text="Done.")], "end_turn"),
+    ])
+    events: list[Event] = []
+    agent = Agent(
+        provider, "model", "system",
+        Registry([
+            ParallelTool("read_a", barrier), ParallelTool("read_b", barrier),
+            NoopTool(),
+        ]),
+        on_event=events.append,
+    )
+
+    assert agent.send("start") == "Done."
+
+    results = agent.messages[2].content
+    assert [item.tool_use_id for item in results] == [
+        "call-1", "call-2", "call-3",
+    ]
+    activity = [
+        (event.kind, event.tool_use_id)
+        for event in events
+        if event.kind in {EventKind.TOOL_CALL, EventKind.TOOL_RESULT}
+    ]
+    assert activity == [
+        (EventKind.TOOL_CALL, "call-1"),
+        (EventKind.TOOL_CALL, "call-2"),
+        (EventKind.TOOL_RESULT, "call-1"),
+        (EventKind.TOOL_RESULT, "call-2"),
+        (EventKind.TOOL_CALL, "call-3"),
+        (EventKind.TOOL_RESULT, "call-3"),
+    ]
+
+
+def test_mixed_parallel_group_budget_exhaustion_commits_all_results() -> None:
+    provider = ScriptedProvider([Response([
+        ContentBlock("tool_use", id="call-1", name="read_a", input={}),
+        ContentBlock("tool_use", id="call-2", name="read_b", input={}),
+        ContentBlock("tool_use", id="call-3", name="noop", input={}),
+    ], "tool_use")])
+    agent = Agent(
+        provider, "model", "system",
+        Registry([
+            FastParallelTool("read_a"), FastParallelTool("read_b"), NoopTool(),
+        ]),
+    )
+
+    with pytest.raises(BudgetExhaustedError):
+        agent.send("start", budgets=RunBudgets(
+            provider_calls=None, tool_calls=1, elapsed_seconds=None,
+        ))
+
+    results = agent.messages[-1].content
+    assert [item.tool_use_id for item in results] == [
+        "call-1", "call-2", "call-3",
+    ]
+    assert results[0].content == "read_a-done"
+    assert all(item.is_error for item in results[1:])
+    assert agent.run_counters.tool_calls == 1
+
+
+def test_subagent_inherits_narrower_policy_budget_and_run_attribution(
+    tmp_path: Path,
+) -> None:
+    child_provider = ScriptedProvider([
+        Response([ContentBlock("text", text="Child result")], "end_turn"),
+    ])
+    delegate = SubagentTool(child_provider)
+    parent_provider = ScriptedProvider([
+        Response([
+            ContentBlock("tool_use", id="call-1", name="delegate", input={}),
+        ], "tool_use"),
+        Response([ContentBlock("text", text="Parent done")], "end_turn"),
+    ])
+    events: list[Event] = []
+    journals = RunJournalStore(tmp_path / "runs")
+    agent = Agent(
+        parent_provider, "model", "system", Registry([delegate]),
+        capability=resolve_capability("change"), on_event=events.append,
+        budgets=RunBudgets(
+            provider_calls=5, tool_calls=5, elapsed_seconds=None,
+        ),
+        journal_store=journals, workspace=tmp_path,
+    )
+    delegate.parent = agent
+
+    assert agent.send("start") == "Parent done"
+
+    assert delegate.child_outcome is not None
+    assert agent.last_outcome is not None
+    assert delegate.child_outcome.capability == "inspect"
+    assert delegate.child_outcome.parent_run_id == agent.last_outcome.run_id
+    assert delegate.child_outcome.counters.provider_calls == 1
+    assert agent.run_counters.provider_calls == 3
+    assert agent.run_counters.tool_calls == 1
+    assert agent.last_outcome.child_outcomes == [delegate.child_outcome]
+    child_events = [event for event in events if event.parent_run_id]
+    assert child_events
+    assert {event.run_id for event in child_events} == {
+        delegate.child_outcome.run_id,
+    }
+    assert {event.parent_run_id for event in child_events} == {
+        agent.last_outcome.run_id,
+    }
+    child_journal = journals.load(delegate.child_outcome.run_id)
+    assert child_journal is not None
+    assert child_journal["parent_run_id"] == agent.last_outcome.run_id
+
+
+def test_subagent_requires_active_parent_and_strictly_narrower_capability() -> None:
+    agent = Agent(
+        ScriptedProvider([]), "model", "system", Registry([]),
+        capability=resolve_capability("change"),
+    )
+    with pytest.raises(RuntimeError, match="active parent"):
+        agent.run_subagent(
+            "child", resolve_capability("inspect"), RunBudgets(),
+        )
 
 
 def test_invalid_tool_arguments_are_returned_without_execution() -> None:
@@ -529,15 +778,17 @@ def test_structured_events_include_call_identity_commentary_and_timing() -> None
 
     assert agent.send("start") == "Done."
     assert [event.kind for event in events] == [
+        EventKind.RUN_STARTED,
         EventKind.TOOL_CALL,
         EventKind.TOOL_RESULT,
         EventKind.ASSISTANT_COMMENTARY,
         EventKind.ASSISTANT_TEXT,
         EventKind.DONE,
+        EventKind.RUN_FINISHED,
     ]
-    assert events[0].tool_use_id == events[1].tool_use_id == "call-7"
-    assert events[0].name == events[1].name == "noop"
-    assert events[1].duration_ms >= 0
+    assert events[1].tool_use_id == events[2].tool_use_id == "call-7"
+    assert events[1].name == events[2].name == "noop"
+    assert events[2].duration_ms >= 0
     assert all(event.elapsed_ms >= 0 for event in events)
 
 
@@ -574,7 +825,7 @@ def test_cancellation_commits_error_and_skipped_results_for_announced_calls() ->
     assert [event.tool_use_id for event in events if event.kind == EventKind.TOOL_RESULT] == [
         "call-1", "call-2",
     ]
-    assert events[-1].kind == EventKind.ERROR
+    assert events[-2].kind == EventKind.ERROR
 
 
 def test_stop_sequence_is_a_normal_terminal_response() -> None:
@@ -608,8 +859,52 @@ def test_provider_call_budget_stops_before_another_request() -> None:
     assert agent.last_outcome.reason == "budget_provider_calls_exhausted"
     assert agent.last_outcome.final_text == "Working."
     assert any(event.kind == EventKind.BUDGET_UPDATED for event in events)
-    assert events[-1].kind == EventKind.ERROR
-    assert events[-1].reason == "budget_provider_calls_exhausted"
+    assert events[-2].kind == EventKind.ERROR
+    assert events[-2].reason == "budget_provider_calls_exhausted"
+
+
+def test_per_send_budget_cannot_weaken_configured_budget() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock("text", text="Working.")], "pause_turn"),
+        Response([ContentBlock("text", text="Must not be requested.")]),
+    ])
+    agent = Agent(
+        provider, "model", "system", Registry([]),
+        budgets=RunBudgets(
+            provider_calls=1, tool_calls=None, elapsed_seconds=None,
+        ),
+    )
+
+    with pytest.raises(BudgetExhaustedError) as raised:
+        agent.send("start", budgets=RunBudgets(
+            provider_calls=5, tool_calls=None, elapsed_seconds=None,
+        ))
+
+    assert raised.value.reason_code == "budget_provider_calls_exhausted"
+    assert len(provider.requests) == 1
+
+
+def test_capability_budget_cannot_weaken_configured_or_per_send_budget() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock("text", text="Working.")], "pause_turn"),
+        Response([ContentBlock("text", text="Must not be requested.")]),
+    ])
+    capability = Capability(
+        "bounded", "bounded", budgets=RunBudgets(
+            provider_calls=1, tool_calls=None, elapsed_seconds=None,
+        ),
+    )
+    agent = Agent(provider, "model", "system", Registry([]))
+
+    with pytest.raises(BudgetExhaustedError):
+        agent.send(
+            "start", capability=capability,
+            budgets=RunBudgets(
+                provider_calls=5, tool_calls=None, elapsed_seconds=None,
+            ),
+        )
+
+    assert len(provider.requests) == 1
 
 
 def test_tool_call_budget_commits_ordered_results_before_stopping() -> None:
@@ -703,6 +998,25 @@ def test_successful_budgeted_run_records_outcome_and_run_usage() -> None:
     budget_events = [event for event in events if event.kind == EventKind.BUDGET_UPDATED]
     assert budget_events[-1].input_tokens == 3
     assert budget_events[-1].output_tokens == 2
+
+
+def test_run_lifecycle_events_have_id_status_and_monotonic_sequence() -> None:
+    provider = ScriptedProvider([Response([
+        ContentBlock("text", text="Done."),
+    ], "end_turn")])
+    events: list[Event] = []
+    agent = Agent(provider, "model", "system", Registry([]), on_event=events.append)
+
+    assert agent.send("start") == "Done."
+
+    assert events[0].kind == EventKind.RUN_STARTED
+    assert events[0].status == "running"
+    assert events[-1].kind == EventKind.RUN_FINISHED
+    assert events[-1].status == "succeeded"
+    assert events[-1].reason == "completed"
+    assert agent.last_outcome is not None
+    assert {event.run_id for event in events} == {agent.last_outcome.run_id}
+    assert [event.sequence for event in events] == list(range(1, len(events) + 1))
 
 
 def test_capability_filters_schema_and_execution_and_labels_outcome() -> None:

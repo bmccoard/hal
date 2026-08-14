@@ -6,6 +6,7 @@ from enum import Enum
 import secrets
 
 from .models import Usage
+from .verification import VerificationCheck, VerificationResult
 
 
 READ_ONLY_TOOLS = frozenset({
@@ -26,6 +27,7 @@ class Capability:
     allowed_tools: frozenset[str] | None = None
     denied_tools: frozenset[str] = frozenset()
     protect_existing_files: bool = False
+    budgets: RunBudgets | None = None
 
     def __post_init__(self) -> None:
         if not self.name.strip():
@@ -63,11 +65,18 @@ BUILTIN_CAPABILITIES = {
 }
 
 
-def resolve_capability(name: str) -> Capability:
+def resolve_capability(
+    name: str, custom: dict[str, Capability] | None = None,
+) -> Capability:
+    collisions = set(custom or {}) & set(BUILTIN_CAPABILITIES)
+    if collisions:
+        names = ", ".join(sorted(collisions))
+        raise ValueError(f"built-in capability cannot be overridden: {names}")
+    capabilities = {**BUILTIN_CAPABILITIES, **(custom or {})}
     try:
-        return BUILTIN_CAPABILITIES[name.strip().lower()]
+        return capabilities[name.strip().lower()]
     except KeyError as exc:
-        available = ", ".join(sorted(BUILTIN_CAPABILITIES))
+        available = ", ".join(sorted(capabilities))
         raise ValueError(
             f"unknown capability {name!r} (available: {available})"
         ) from exc
@@ -142,6 +151,42 @@ class RunBudgets:
             raise ValueError("elapsed_seconds must be a positive number or null")
 
 
+@dataclass(frozen=True, slots=True)
+class SubagentProfile:
+    """Trusted configuration for one model-facing child-agent choice."""
+
+    name: str
+    capability: Capability
+    budgets: RunBudgets
+    model: str = ""
+    description: str = ""
+
+
+def compose_run_budgets(*budgets: RunBudgets | None) -> RunBudgets | None:
+    """Resolve the strictest limit from every applicable budget layer.
+
+    A ``None`` budget layer supplies no restrictions. Within a supplied layer, a
+    ``None`` field is unbounded and therefore cannot relax a finite limit from
+    another layer.
+    """
+    layers = tuple(budget for budget in budgets if budget is not None)
+    if not layers:
+        return None
+
+    def strictest(name: str) -> int | float | None:
+        limits = [getattr(budget, name) for budget in layers]
+        finite = [limit for limit in limits if limit is not None]
+        return min(finite) if finite else None
+
+    return RunBudgets(
+        provider_calls=strictest("provider_calls"),
+        tool_calls=strictest("tool_calls"),
+        elapsed_seconds=strictest("elapsed_seconds"),
+        input_tokens=strictest("input_tokens"),
+        output_tokens=strictest("output_tokens"),
+    )
+
+
 @dataclass(slots=True)
 class RunCounters:
     provider_calls: int = 0
@@ -153,8 +198,12 @@ class RunCounters:
 @dataclass(slots=True)
 class RunOutcome:
     run_id: str = field(default_factory=lambda: f"run_{secrets.token_hex(8)}")
+    parent_run_id: str = ""
     capability: str = ""
     status: RunStatus = RunStatus.RUNNING
     final_text: str = ""
     reason: str = ""
     counters: RunCounters = field(default_factory=RunCounters)
+    verification: list[VerificationResult] = field(default_factory=list)
+    repair_attempts: int = 0
+    child_outcomes: list[RunOutcome] = field(default_factory=list)

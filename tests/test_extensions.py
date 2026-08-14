@@ -77,7 +77,7 @@ def test_load_extensions_rejects_non_tools_and_collisions(tmp_path: Path, monkey
 
 def test_cli_agent_factory_loads_configured_extensions(tmp_path: Path, monkeypatch) -> None:
     from hal.cli import _make_agent
-    from hal.harness import RunBudgets
+    from hal.harness import Capability, RunBudgets
 
     class Provider:
         streaming_enabled = True
@@ -111,3 +111,54 @@ def test_cli_agent_factory_loads_configured_extensions(tmp_path: Path, monkeypat
         registry, ["example"], tmp_path, tmp_path,
         {"example": {"value": 1}},
     )]
+
+
+def test_cli_agent_factory_validates_custom_tools_after_extensions(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    from hal.cli import _make_agent
+    from hal.harness import Capability
+
+    class Provider:
+        streaming_enabled = True
+
+    def configure(monkeypatch, registry):
+        monkeypatch.setattr("hal.cli.load_skills", lambda _cwd: [])
+        monkeypatch.setattr("hal.cli.resolve_phases", lambda _config: {})
+        monkeypatch.setattr("hal.cli.create_provider", lambda _config: Provider())
+        monkeypatch.setattr("hal.cli.build_system", lambda *_args: "system")
+        monkeypatch.setattr("hal.cli.workspace_root", lambda _cwd: tmp_path)
+        monkeypatch.setattr("hal.cli.default_registry", lambda *_args: registry)
+
+    registry = Registry([])
+    configure(monkeypatch, registry)
+    monkeypatch.setattr(
+        "hal.cli.load_extensions",
+        lambda target, *_args: target.extend([ExtensionTool()]),
+    )
+    config = Config(
+        model="test-model", extensions=["example"],
+        capabilities={
+            "search": Capability(
+                "search", "search", allowed_tools=frozenset({"example_search"}),
+            ),
+        },
+        default_capability="search",
+    )
+
+    agent, _, _ = _make_agent(config, tmp_path)
+    assert agent.capability.allowed_tools == frozenset({"example_search"})
+
+    registry = Registry([])
+    configure(monkeypatch, registry)
+    monkeypatch.setattr("hal.cli.load_extensions", lambda *_args: None)
+    with pytest.raises(ValueError, match="unknown tool.*missing_tool"):
+        _make_agent(Config(
+            model="test-model",
+            capabilities={
+                "broken": Capability(
+                    "broken", "broken",
+                    allowed_tools=frozenset({"missing_tool"}),
+                ),
+            },
+        ), tmp_path)

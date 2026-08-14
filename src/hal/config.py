@@ -8,7 +8,11 @@ from typing import Any
 
 import yaml
 
-from .harness import RunBudgets, resolve_capability
+from .harness import (
+    BUILTIN_CAPABILITIES, Capability, RunBudgets, SubagentProfile,
+    resolve_capability,
+)
+from .verification import VerificationCheck
 
 
 DEFAULT_MODELS = {
@@ -42,7 +46,7 @@ class Config:
     openai_auth: str = "api_key"
     api_key: str = ""
     git_backend: str = "auto"
-    subagents: dict[str, str] = field(default_factory=dict)
+    subagents: dict[str, SubagentProfile] = field(default_factory=dict)
     tool_approvals: list[str] = field(default_factory=list)
     only_write_locally: bool = False
     bash_policy: str = "normal"
@@ -58,6 +62,9 @@ class Config:
     providers: dict[str, ProviderProfile] = field(default_factory=dict)
     harness_budgets: RunBudgets | None = None
     default_capability: str = ""
+    verification_checks: list[VerificationCheck] = field(default_factory=list)
+    repair_attempts: int = 0
+    capabilities: dict[str, Capability] = field(default_factory=dict)
     source: str = "embedded"
 
     def validate(self) -> None:
@@ -103,7 +110,31 @@ class Config:
         ):
             raise ValueError("harness.budgets must be a mapping or null")
         if self.default_capability:
-            resolve_capability(self.default_capability)
+            resolve_capability(self.default_capability, self.capabilities)
+        if not isinstance(self.capabilities, dict) or any(
+            not isinstance(key, str) or not isinstance(value, Capability)
+            for key, value in self.capabilities.items()
+        ):
+            raise ValueError("harness.capabilities must contain named capabilities")
+        if not isinstance(self.subagents, dict) or any(
+            not isinstance(key, str) or not isinstance(value, SubagentProfile)
+            for key, value in self.subagents.items()
+        ):
+            raise ValueError("subagents must contain named profiles")
+        if not isinstance(self.verification_checks, list) or any(
+            not isinstance(check, VerificationCheck)
+            for check in self.verification_checks
+        ):
+            raise ValueError("harness.verification must contain verification checks")
+        check_names = [check.name for check in self.verification_checks]
+        if len(set(check_names)) != len(check_names):
+            raise ValueError("harness.verification check names must be unique")
+        if (
+            isinstance(self.repair_attempts, bool)
+            or not isinstance(self.repair_attempts, int)
+            or self.repair_attempts < 0
+        ):
+            raise ValueError("harness.repair_attempts must be a non-negative integer")
         cleaned: list[str] = []
         for item in self.tool_approvals:
             item = str(item).strip()
@@ -168,13 +199,35 @@ def _bool(section: dict[str, Any], name: str, default: bool) -> bool:
     return value
 
 
-def _harness(data: dict[str, Any]) -> tuple[RunBudgets | None, str]:
+def _parse_budgets(value: Any, path: str) -> RunBudgets:
+    if not isinstance(value, dict):
+        raise ValueError(f"{path} must be a mapping")
+    fields = {
+        "provider_calls", "tool_calls", "elapsed_seconds",
+        "input_tokens", "output_tokens",
+    }
+    unknown = set(value) - fields
+    if unknown:
+        names = ", ".join(sorted(str(item) for item in unknown))
+        raise ValueError(f"unknown {path} setting(s): {names}")
+    try:
+        return RunBudgets(**value)
+    except ValueError as exc:
+        raise ValueError(f"{path}: {exc}") from exc
+
+
+def _harness(data: dict[str, Any]) -> tuple[
+    RunBudgets | None, str, list[VerificationCheck], int, dict[str, Capability],
+]:
     if "harness" not in data or data["harness"] is None:
-        return None, ""
+        return None, "", [], 0, {}
     harness = data["harness"]
     if not isinstance(harness, dict):
         raise ValueError("harness must be a mapping")
-    unknown_harness = set(harness) - {"budgets", "default_capability"}
+    unknown_harness = set(harness) - {
+        "budgets", "default_capability", "verification", "repair_attempts",
+        "capabilities",
+    }
     if unknown_harness:
         names = ", ".join(sorted(str(name) for name in unknown_harness))
         raise ValueError(f"unknown harness setting(s): {names}")
@@ -185,26 +238,82 @@ def _harness(data: dict[str, Any]) -> tuple[RunBudgets | None, str]:
         raise ValueError("harness.default_capability must be a string or null")
     else:
         name = raw_name.strip().lower()
-    if name:
-        resolve_capability(name)
     parsed_budgets = None
     if "budgets" in harness and harness["budgets"] is not None:
-        budgets = harness["budgets"]
-        if not isinstance(budgets, dict):
-            raise ValueError("harness.budgets must be a mapping or null")
-        fields = {
-            "provider_calls", "tool_calls", "elapsed_seconds",
-            "input_tokens", "output_tokens",
-        }
-        unknown_budgets = set(budgets) - fields
-        if unknown_budgets:
-            names = ", ".join(sorted(str(item) for item in unknown_budgets))
-            raise ValueError(f"unknown harness.budgets setting(s): {names}")
+        parsed_budgets = _parse_budgets(harness["budgets"], "harness.budgets")
+    raw_checks = harness.get("verification") or []
+    if not isinstance(raw_checks, list):
+        raise ValueError("harness.verification must be a list or null")
+    checks: list[VerificationCheck] = []
+    for index, raw in enumerate(raw_checks):
+        if not isinstance(raw, dict):
+            raise ValueError(f"harness.verification[{index}] must be a mapping")
+        unknown = set(raw) - {"name", "command", "timeout_seconds", "required"}
+        if unknown:
+            names = ", ".join(sorted(str(item) for item in unknown))
+            raise ValueError(f"unknown harness.verification[{index}] setting(s): {names}")
         try:
-            parsed_budgets = RunBudgets(**budgets)
-        except ValueError as exc:
-            raise ValueError(f"harness.budgets: {exc}") from exc
-    return parsed_budgets, name
+            checks.append(VerificationCheck(**raw))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"harness.verification[{index}]: {exc}") from exc
+    names = [check.name for check in checks]
+    if len(set(names)) != len(names):
+        raise ValueError("harness.verification check names must be unique")
+    repair_attempts = harness.get("repair_attempts", 0)
+    if (
+        isinstance(repair_attempts, bool)
+        or not isinstance(repair_attempts, int)
+        or repair_attempts < 0
+    ):
+        raise ValueError("harness.repair_attempts must be a non-negative integer")
+    raw_capabilities = harness.get("capabilities")
+    if raw_capabilities is None:
+        raw_capabilities = {}
+    if not isinstance(raw_capabilities, dict):
+        raise ValueError("harness.capabilities must be a mapping or null")
+    capabilities: dict[str, Capability] = {}
+    for raw_capability_name, raw in raw_capabilities.items():
+        capability_name = str(raw_capability_name).strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", capability_name):
+            raise ValueError(f"invalid capability name {raw_capability_name!r}")
+        if capability_name in BUILTIN_CAPABILITIES:
+            raise ValueError(f"built-in capability {capability_name!r} cannot be redefined")
+        if not isinstance(raw, dict):
+            raise ValueError(f"harness.capabilities.{capability_name} must be a mapping")
+        unknown = set(raw) - {
+            "description", "allowed_tools", "denied_tools",
+            "protect_existing_files", "budgets",
+        }
+        if unknown:
+            names = ", ".join(sorted(str(item) for item in unknown))
+            raise ValueError(
+                f"unknown harness.capabilities.{capability_name} setting(s): {names}"
+            )
+        allowed = raw.get("allowed_tools")
+        denied = raw.get("denied_tools", [])
+        if allowed is not None and not isinstance(allowed, list):
+            raise ValueError(f"harness.capabilities.{capability_name}.allowed_tools must be a list or null")
+        if not isinstance(denied, list):
+            raise ValueError(f"harness.capabilities.{capability_name}.denied_tools must be a list")
+        if any(not isinstance(item, str) or not item.strip() for item in (allowed or []) + denied):
+            raise ValueError(f"harness.capabilities.{capability_name} tool names must be non-empty strings")
+        protect = raw.get("protect_existing_files", False)
+        if not isinstance(protect, bool):
+            raise ValueError(f"harness.capabilities.{capability_name}.protect_existing_files must be true or false")
+        capability_budgets = None
+        if raw.get("budgets") is not None:
+            capability_budgets = _parse_budgets(
+                raw["budgets"], f"harness.capabilities.{capability_name}.budgets",
+            )
+        capabilities[capability_name] = Capability(
+            capability_name,
+            str(raw.get("description") or f"Run under the {capability_name} policy").strip(),
+            None if allowed is None else frozenset(item.strip() for item in allowed),
+            frozenset(item.strip() for item in denied), protect, capability_budgets,
+        )
+    if name:
+        resolve_capability(name, capabilities)
+    return parsed_budgets, name, checks, repair_attempts, capabilities
 
 
 def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Config:
@@ -215,7 +324,36 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
     output = data.get("output") or {}
     compaction = data.get("compaction") or {}
     git = data.get("git") or {}
-    harness_budgets, default_capability = _harness(data)
+    harness_budgets, default_capability, verification_checks, repair_attempts, capabilities = _harness(data)
+    raw_subagents = data.get("subagents")
+    if raw_subagents is None:
+        raw_subagents = {}
+    if not isinstance(raw_subagents, dict):
+        raise ValueError("subagents must be a mapping or null")
+    subagents: dict[str, SubagentProfile] = {}
+    for raw_profile_name, raw in raw_subagents.items():
+        profile_name = str(raw_profile_name).strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", profile_name):
+            raise ValueError(f"invalid subagent profile name {raw_profile_name!r}")
+        if isinstance(raw, str):
+            raw = {"model": raw}
+        if not isinstance(raw, dict):
+            raise ValueError(f"subagents.{profile_name} must be a mapping or model string")
+        unknown = set(raw) - {"model", "capability", "budgets", "description"}
+        if unknown:
+            names = ", ".join(sorted(str(item) for item in unknown))
+            raise ValueError(f"unknown subagents.{profile_name} setting(s): {names}")
+        capability_name = str(raw.get("capability") or "inspect").strip().lower()
+        capability = resolve_capability(capability_name, capabilities)
+        raw_budgets = raw.get("budgets", {
+            "provider_calls": 10, "tool_calls": 20, "elapsed_seconds": 300,
+        })
+        budgets = _parse_budgets(raw_budgets, f"subagents.{profile_name}.budgets")
+        subagents[profile_name] = SubagentProfile(
+            profile_name, capability, budgets,
+            str(raw.get("model") or "").strip(),
+            str(raw.get("description") or "").strip(),
+        )
     if not isinstance(git, dict):
         raise ValueError("git must be a mapping")
     extensions = data.get("extensions", [])
@@ -263,7 +401,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         openai_auth=str(data.get("openai_auth") or "api_key").strip().lower(),
         api_key=str(data.get("api_key") or data.get("apiKey") or "").strip(),
         git_backend=str(git.get("backend") or "auto").strip().lower(),
-        subagents=dict(data.get("subagents") or {}),
+        subagents=subagents,
         tool_approvals=list(data.get("tool_approvals") or []),
         only_write_locally=_bool(data, "only_write_locally", False),
         bash_policy=str(data.get("bash_policy") or "normal").strip().lower(),
@@ -279,6 +417,9 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         providers=profiles,
         harness_budgets=harness_budgets,
         default_capability=default_capability,
+        verification_checks=verification_checks,
+        repair_attempts=repair_attempts,
+        capabilities=capabilities,
         source=source,
     )
     cfg.validate()

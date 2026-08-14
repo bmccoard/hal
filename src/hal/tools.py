@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import tempfile
+from enum import Enum
 from abc import ABC, abstractmethod
 from pathlib import Path
 from collections.abc import Callable
@@ -98,8 +99,16 @@ def native_shell_version(kind: str, executable: str) -> str:
     return lines[0][:120] if lines else ""
 
 
+class ToolEffect(str, Enum):
+    READ_ONLY = "read_only"
+    MUTATING = "mutating"
+    EXTERNAL = "external"
+    UNKNOWN = "unknown"
+
+
 class Tool(ABC):
     parallel_safe = False
+    effect = ToolEffect.UNKNOWN
 
     @property
     @abstractmethod
@@ -111,6 +120,7 @@ class Tool(ABC):
 
 
 class BashTool(Tool):
+    effect = ToolEffect.EXTERNAL
     def __init__(self, cwd: Path, timeout: float = 120) -> None:
         self.cwd = cwd
         self.timeout = timeout
@@ -147,6 +157,7 @@ class BashTool(Tool):
 
 class ReadFileTool(Tool):
     parallel_safe = True
+    effect = ToolEffect.READ_ONLY
 
     @property
     def spec(self) -> ToolSpec:
@@ -230,6 +241,7 @@ class ReadFileTool(Tool):
 
 
 class WriteFileTool(Tool):
+    effect = ToolEffect.MUTATING
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec("write_file", "Write a UTF-8 file, creating parent directories.", {
@@ -248,6 +260,7 @@ class WriteFileTool(Tool):
 
 
 class EditFileTool(Tool):
+    effect = ToolEffect.MUTATING
     @property
     def spec(self) -> ToolSpec:
         return ToolSpec("edit_file", "Replace exactly one occurrence of text in a UTF-8 file.", {
@@ -286,6 +299,7 @@ class _RootedTool(Tool):
 
 class GlobTool(_RootedTool):
     parallel_safe = True
+    effect = ToolEffect.READ_ONLY
 
     @property
     def spec(self) -> ToolSpec:
@@ -326,6 +340,7 @@ class GlobTool(_RootedTool):
 
 class GrepTool(_RootedTool):
     parallel_safe = True
+    effect = ToolEffect.READ_ONLY
 
     @property
     def spec(self) -> ToolSpec:
@@ -394,9 +409,57 @@ class Registry:
                 raise ValueError(f"duplicate tool name: {name}")
             self._tools[name] = tool
 
+    def bind_agent(self, agent: object) -> None:
+        """Bind agent-aware tools after registry and agent construction."""
+        for tool in self._tools.values():
+            bind = getattr(tool, "bind_agent", None)
+            if callable(bind):
+                bind(agent)
+
     @property
     def specs(self) -> list[ToolSpec]:
         return [self._tools[name].spec for name in sorted(self._tools)]
+
+    def is_parallel_safe(
+        self, name: str, allowed: set[str] | None = None,
+        denied: set[str] | None = None,
+    ) -> bool:
+        """Return true only when a call can bypass every serial policy barrier."""
+        denied = denied or set()
+        if name in denied or (allowed is not None and name not in allowed):
+            return False
+        tool = self._tools.get(name)
+        if tool is None or not tool.parallel_safe or name == "bash":
+            return False
+        return not any(
+            rule == name or rule.startswith(name + " ")
+            for rule in self.approvals
+        )
+
+    def metadata(self, name: str) -> dict[str, object]:
+        """Return scheduling metadata with current approval policy resolved."""
+        try:
+            tool = self._tools[name]
+        except KeyError as exc:
+            raise ValueError(f"unknown tool {name!r}") from exc
+        target_approval = any(
+            rule == name or rule.startswith(name + " ")
+            for rule in self.approvals
+        )
+        approval_gated = target_approval or (
+            name == "bash" and self.bash_policy == "approve"
+        )
+        effect = getattr(tool, "effect", ToolEffect.UNKNOWN)
+        if not isinstance(effect, ToolEffect):
+            try:
+                effect = ToolEffect(effect)
+            except ValueError:
+                effect = ToolEffect.UNKNOWN
+        return {
+            "effect": effect.value,
+            "parallel_safe": bool(getattr(tool, "parallel_safe", False)),
+            "approval_gated": approval_gated,
+        }
 
     def specs_for(self, allowed: set[str] | None = None,
                   denied: set[str] | None = None) -> list[ToolSpec]:

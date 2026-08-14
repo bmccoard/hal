@@ -76,6 +76,9 @@ but changing them does not currently alter runtime behavior.
 | `git.backend` | Active | Selects `auto`, `native`, or `dulwich`; `auto` prefers the Git executable and otherwise uses Dulwich when the optional `git` extra is installed. |
 | `harness.budgets` | Active | Applies per-send provider-call, tool-call, elapsed-time, input-token, and output-token limits in headless and interactive modes. |
 | `harness.default_capability` | Active | Optionally constrains ordinary sends to the built-in `inspect`, `plan`, `change`, or `review` policy. |
+| `harness.capabilities` | Active | Defines additional named tool policies and stricter per-capability budgets for ordinary sends and configured phases. |
+| `harness.verification` | Active | Runs trusted, serial workspace checks after a successful agent turn and records bounded typed results. |
+| `harness.repair_attempts` | Active | Allows a bounded number of repair turns after required verification failures without resetting policy or budgets. |
 | `compaction.context_window_tokens` | Reserved | Parsed and validated; transcript compaction is not implemented yet. |
 | `features.prompt_caching` | Reserved | Parsed; provider prompt-cache controls are not emitted yet. |
 | `output.verbose` | Active in TUI | Concise receipts by default; shows full tool calls and results when enabled. The basic REPL retains its compact fixed view. |
@@ -98,6 +101,12 @@ harness:
     elapsed_seconds: 900
     input_tokens: null
     output_tokens: null
+  verification:
+    - name: tests
+      command: .venv/bin/pytest -q
+      timeout_seconds: 120
+      required: true
+  repair_attempts: 1
 ```
 
 Provider and tool limits are checked before starting another call. Token usage is
@@ -112,6 +121,71 @@ restrictions composed so a phase cannot restore access removed by the configured
 default. `inspect` and `plan` expose only read tools; `change` and `review` deny Git
 initialization, index changes, commits, and pushes and protect existing files from
 whole-file replacement through `write_file`.
+
+Additional capabilities can be defined under `harness.capabilities` with
+`allowed_tools`, `denied_tools`, `protect_existing_files`, and optional `budgets`.
+Built-ins cannot be redefined. Tool names are validated after extensions load, so
+extension tools can be referenced safely. A configured phase can select one with a
+`capability` field. Every applicable allowed-tool set is intersected, denied-tool sets
+are combined, and each budget field resolves to its smallest finite value.
+
+Verification commands come only from configuration, never from model output. They run
+serially after the agent turn in the workspace. A nonzero exit, timeout, or command
+start failure from a required check fails the run; an optional check is recorded but
+does not change a successful outcome. Output is bounded with the same head/tail policy
+as tool results, and cancellation stops verification immediately.
+
+`repair_attempts` defaults to `0`. When enabled, a required verification failure is
+returned to the agent as a bounded report. Repair uses the same capability and caller
+restrictions and the remaining counters from the original send. Cancellation or an
+exhausted hard budget prevents repair from starting.
+
+Every CLI-created agent also writes a versioned post-run journal under
+`~/.hal/sessions/runs`. Journals contain resolved policy, budgets, counters, check
+results, repair counts, and terminal status. They intentionally omit prompts,
+transcripts, final model text, environment variables, and credentials.
+
+`hal run --json` includes the run ID, terminal harness status and reason, counters,
+verification summaries, and repair count. Exit code `3` indicates budget exhaustion,
+`4` indicates required verification failure, and `130` indicates cancellation; other
+failures use `1`.
+
+Use `hal harness [capability] --json` to inspect the fully resolved policy without
+starting a provider request. The command loads extensions, validates configured tool
+references, and reports available and denied tools, effective budgets, verification,
+repair attempts, approvals, shell policy, and workspace-write protection. Without a
+name it selects the configured default capability, or `change` when no default exists.
+JSON output also includes each available tool's effect classification, parallel-safety
+marker, and resolved approval-gated status.
+
+The TUI shows verification starts and results, repair attempts, and terminal run
+status. Verbose mode additionally shows budget usage, complete bounded check output,
+and repair failure reports.
+
+Harness integrations can use `Agent.run_subagent(...)` during an active parent run.
+The child must supply a strictly narrower capability and an explicit budget. HAL caps
+that budget by the parent's remaining limits, keeps child counters and outcomes, then
+attributes child usage to the parent. Child lifecycle events and journals contain both
+run IDs. This API does not yet expose arbitrary model-selected subagents.
+
+Trusted model-facing delegation is enabled by configured profiles:
+
+```yaml
+subagents:
+  researcher:
+    description: Inspect relevant code without modifying it
+    model: small-model
+    capability: inspect
+    budgets:
+      provider_calls: 10
+      tool_calls: 20
+      elapsed_seconds: 300
+```
+
+When at least one profile exists, HAL registers the serial `delegate` tool. The model
+can select only a configured profile and supply task text. Model, capability, tools,
+and budgets cannot be supplied through tool arguments. Child policy is intersected
+with the active parent and its budget is capped by the parent's remaining limits.
 
 ### Feature flags
 

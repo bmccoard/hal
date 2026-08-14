@@ -4,8 +4,11 @@ import signal
 from types import SimpleNamespace
 
 from hal.agent import Agent
-from hal.cli import _save_live_session, main, run_chat, run_headless, run_sessions
+from hal.cli import (
+    _save_live_session, main, run_chat, run_harness, run_headless, run_sessions,
+)
 from hal.config import parse_config
+from hal.harness import Capability, RunBudgets
 from hal.models import ContentBlock, Response, ToolSpec, Usage
 from hal.sayings import HAL_SAYINGS
 from hal.sessions import Metadata, Session, SessionStore
@@ -28,6 +31,48 @@ def test_unknown_command_returns_usage_error() -> None:
     output, error = io.StringIO(), io.StringIO()
     assert main(["wat"], stdout=output, stderr=error) == 2
     assert "unknown command: wat" in error.getvalue()
+
+
+def test_harness_inspection_resolves_policy_and_budgets_as_json(
+    monkeypatch, tmp_path,
+) -> None:
+    config = parse_config({"harness": {
+        "budgets": {
+            "provider_calls": 10, "tool_calls": None,
+            "elapsed_seconds": None,
+        },
+        "verification": [{"name": "tests", "command": "pytest"}],
+        "repair_attempts": 1,
+        "capabilities": {"docs": {
+            "allowed_tools": ["read_file"],
+            "denied_tools": ["bash"],
+            "budgets": {
+                "provider_calls": 3, "tool_calls": 4,
+                "elapsed_seconds": None,
+            },
+        }},
+    }})
+    registry = Registry([])
+    registry._tools = {
+        "read_file": SimpleNamespace(spec=ToolSpec("read_file", "read", {})),
+        "bash": SimpleNamespace(spec=ToolSpec("bash", "bash", {})),
+    }
+    monkeypatch.setattr("hal.cli._load", lambda _cwd, _stderr: config)
+    monkeypatch.setattr("hal.cli.workspace_root", lambda _cwd: tmp_path)
+    monkeypatch.setattr("hal.cli._make_registry", lambda *_args: registry)
+    output = io.StringIO()
+
+    assert run_harness(["docs", "--json"], output, io.StringIO()) == 0
+
+    payload = json.loads(output.getvalue())
+    assert payload["capability"] == "docs"
+    assert payload["available_tools"] == ["read_file"]
+    assert payload["tool_metadata"]["read_file"]["effect"] == "unknown"
+    assert payload["denied_tools"] == ["bash"]
+    assert payload["budgets"]["provider_calls"] == 3
+    assert payload["budgets"]["tool_calls"] == 4
+    assert payload["verification"] == ["tests"]
+    assert payload["repair_attempts"] == 1
 
 
 def test_repl_workflows_displays_ordered_phases(monkeypatch, tmp_path) -> None:
@@ -116,6 +161,38 @@ def test_headless_timeout_covers_the_complete_agent_loop(monkeypatch) -> None:
     assert result["ok"] is False
     assert result["error"] == "operation timed out"
     assert result["elapsed_ms"] < 1000
+
+
+def test_headless_json_exposes_harness_outcome_and_budget_exit_code(monkeypatch) -> None:
+    class Provider:
+        name = "fake"
+
+        def complete(self, _request, cancellation=None):
+            return Response([ContentBlock("text", text="Working.")], "pause_turn")
+
+    config = SimpleNamespace(provider="fake", model="model")
+    agent = Agent(
+        Provider(), "model", "system", Registry([]),
+        budgets=RunBudgets(
+            provider_calls=1, tool_calls=None, elapsed_seconds=None,
+        ),
+    )
+    monkeypatch.setattr("hal.cli._load", lambda _cwd, _stderr: config)
+    monkeypatch.setattr(
+        "hal.cli._make_agent", lambda *_args, **_kwargs: (agent, [], {}),
+    )
+    output = io.StringIO()
+
+    assert run_headless(
+        ["--json", "work"], io.StringIO(""), output, io.StringIO(),
+    ) == 3
+
+    result = json.loads(output.getvalue())
+    assert result["ok"] is False
+    assert result["harness"]["status"] == "budget_exhausted"
+    assert result["harness"]["reason"] == "budget_provider_calls_exhausted"
+    assert result["harness"]["provider_calls"] == 1
+    assert result["harness"]["run_id"].startswith("run_")
 
 
 def test_ctrl_c_cancels_turn_commits_results_and_saves_valid_session(monkeypatch) -> None:

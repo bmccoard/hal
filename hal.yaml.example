@@ -46,6 +46,26 @@ compaction:
 #     elapsed_seconds: 900
 #     input_tokens: null
 #     output_tokens: null
+#   # Trusted commands run serially after a successful agent turn. These commands
+#   # are configuration policy and are never accepted from model output.
+#   verification:
+#     - name: tests
+#       command: .venv/bin/pytest -q
+#       timeout_seconds: 120
+#       required: true
+#   # Optional bounded agent turns after required checks fail. Policy and budget
+#   # counters carry across attempts. Defaults to zero.
+#   repair_attempts: 1
+#   # Custom policies may only narrow global budgets and caller/registry access.
+#   capabilities:
+#     docs:
+#       description: Edit documentation with a small call budget
+#       allowed_tools: [glob, grep, read_file, write_file]
+#       denied_tools: [bash]
+#       protect_existing_files: true
+#       budgets:
+#         provider_calls: 10
+#         tool_calls: 20
 
 features:
   agents_file: true     # Active: load applicable AGENTS.md instructions.
@@ -56,6 +76,18 @@ features:
   streaming: true
   # Reserved: parsed, but provider prompt caching is not implemented yet.
   prompt_caching: true
+
+# Optional trusted model-facing child profiles. The delegate tool can choose only a
+# profile and task; policy and budgets remain fixed here and are narrowed by the parent.
+# subagents:
+#   researcher:
+#     description: Inspect relevant code without modifying it
+#     model: small-model
+#     capability: inspect
+#     budgets:
+#       provider_calls: 10
+#       tool_calls: 20
+#       elapsed_seconds: 300
 
 # Installed tool extensions are never loaded unless explicitly enabled here.
 # extensions:

@@ -9,6 +9,7 @@ from pathlib import Path
 import yaml
 
 from .config import Config
+from .harness import Capability, resolve_capability
 from .tools import native_shell, native_shell_version, workspace_root
 
 
@@ -105,6 +106,7 @@ class Phase:
     name: str
     description: str
     prompt: str
+    capability: Capability | None = None
 
 
 _PHASES = {
@@ -121,7 +123,15 @@ def resolve_phases(config: Config) -> dict[str, Phase]:
         if not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", name) or name in {"help", "clear", "model"}:
             raise ValueError(f"invalid or reserved phase name {name!r}")
         previous = result.get(name, Phase(name, f"Run the {name.replace('_', ' ')} phase", ""))
-        result[name] = Phase(name, str(value.get("description") or previous.description).strip(), str(value.get("prompt") or previous.prompt).strip())
+        raw_capability = value.get("capability")
+        capability = (
+            previous.capability if raw_capability is None
+            else resolve_capability(str(raw_capability).strip().lower(), config.capabilities)
+        )
+        result[name] = Phase(
+            name, str(value.get("description") or previous.description).strip(),
+            str(value.get("prompt") or previous.prompt).strip(), capability,
+        )
         if not result[name].prompt:
             raise ValueError(f"phase {name!r} needs a prompt")
     return result
