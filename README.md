@@ -74,12 +74,44 @@ but changing them does not currently alter runtime behavior.
 | `features.skills` | Active | Discovers skills and expands `$name` and `/name` invocations. |
 | `features.streaming` | Active | Streams interactive responses incrementally when supported; disable it to require buffered responses. |
 | `git.backend` | Active | Selects `auto`, `native`, or `dulwich`; `auto` prefers the Git executable and otherwise uses Dulwich when the optional `git` extra is installed. |
+| `harness.budgets` | Active | Applies per-send provider-call, tool-call, elapsed-time, input-token, and output-token limits in headless and interactive modes. |
+| `harness.default_capability` | Active | Optionally constrains ordinary sends to the built-in `inspect`, `plan`, `change`, or `review` policy. |
 | `compaction.context_window_tokens` | Reserved | Parsed and validated; transcript compaction is not implemented yet. |
 | `features.prompt_caching` | Reserved | Parsed; provider prompt-cache controls are not emitted yet. |
 | `output.verbose` | Active in TUI | Concise receipts by default; shows full tool calls and results when enabled. The basic REPL retains its compact fixed view. |
 
 The reserved settings should be tracked as implementation work in the issue
 tracker before being described as supported features.
+
+### Harness budgets
+
+Harness budgets place hard limits on each agent send, including each phase of a
+workflow. They apply to `hal run`, the basic REPL, the TUI, and agents reconstructed
+when a session is resumed. Omit the section to preserve unlimited legacy behavior:
+
+```yaml
+harness:
+  default_capability: change
+  budgets:
+    provider_calls: 50
+    tool_calls: 200
+    elapsed_seconds: 900
+    input_tokens: null
+    output_tokens: null
+```
+
+Provider and tool limits are checked before starting another call. Token usage is
+reported by providers after a response, so reaching a token limit prevents subsequent
+tool or provider calls. A call already in progress is allowed to finish unless it is
+cancelled. Individual `null` values disable that limit; an empty `budgets` mapping uses
+the defaults shown above.
+
+`default_capability` is optional and accepts `inspect`, `plan`, `change`, or `review`.
+It constrains ordinary sends. Workflow phases add their own capability, with all
+restrictions composed so a phase cannot restore access removed by the configured
+default. `inspect` and `plan` expose only read tools; `change` and `review` deny Git
+initialization, index changes, commits, and pushes and protect existing files from
+whole-file replacement through `write_file`.
 
 ### Feature flags
 

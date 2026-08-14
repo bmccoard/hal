@@ -4,6 +4,7 @@ import pytest
 
 from hal.agent import (
     Agent,
+    BudgetExhaustedError,
     ContextWindowExceededError,
     Event,
     EventKind,
@@ -17,7 +18,8 @@ from hal.agent import (
     UnexpectedStopReasonError,
 )
 from hal.cancellation import CancelledError, CancellationToken
-from hal.models import ContentBlock, Response, StreamDelta, ToolSpec
+from hal.harness import Capability, RunBudgets, RunStatus, resolve_capability
+from hal.models import ContentBlock, Response, StreamDelta, ToolSpec, Usage
 from hal.tools import Registry, Tool, default_registry
 
 
@@ -583,3 +585,166 @@ def test_stop_sequence_is_a_normal_terminal_response() -> None:
 
     assert agent.send("start") == "Stopped."
     assert len(provider.requests) == 1
+
+
+def test_provider_call_budget_stops_before_another_request() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock("text", text="Working.")], "pause_turn"),
+        Response([ContentBlock("text", text="Must not be requested.")]),
+    ])
+    events: list[Event] = []
+    agent = Agent(provider, "model", "system", Registry([]), on_event=events.append)
+
+    with pytest.raises(BudgetExhaustedError) as raised:
+        agent.send("start", budgets=RunBudgets(
+            provider_calls=1, tool_calls=None, elapsed_seconds=None,
+        ))
+
+    assert raised.value.reason_code == "budget_provider_calls_exhausted"
+    assert len(provider.requests) == 1
+    assert agent.run_counters.provider_calls == 1
+    assert agent.last_outcome is not None
+    assert agent.last_outcome.status == RunStatus.BUDGET_EXHAUSTED
+    assert agent.last_outcome.reason == "budget_provider_calls_exhausted"
+    assert agent.last_outcome.final_text == "Working."
+    assert any(event.kind == EventKind.BUDGET_UPDATED for event in events)
+    assert events[-1].kind == EventKind.ERROR
+    assert events[-1].reason == "budget_provider_calls_exhausted"
+
+
+def test_tool_call_budget_commits_ordered_results_before_stopping() -> None:
+    provider = ScriptedProvider([Response([
+        ContentBlock("tool_use", id="call-1", name="noop", input={"value": 1}),
+        ContentBlock("tool_use", id="call-2", name="noop", input={"value": 2}),
+        ContentBlock("tool_use", id="call-3", name="noop", input={"value": 3}),
+    ], "tool_use")])
+    agent = Agent(provider, "model", "system", Registry([NoopTool()]))
+
+    with pytest.raises(BudgetExhaustedError) as raised:
+        agent.send("start", budgets=RunBudgets(
+            provider_calls=None, tool_calls=1, elapsed_seconds=None,
+        ))
+
+    assert raised.value.reason_code == "budget_tool_calls_exhausted"
+    assert agent.run_counters.tool_calls == 1
+    results = agent.messages[-1].content
+    assert [result.tool_use_id for result in results] == ["call-1", "call-2", "call-3"]
+    assert results[0].content == "ok"
+    assert results[0].is_error is False
+    assert "not executed" in results[1].content
+    assert "skipped" in results[2].content
+    assert all(result.is_error for result in results[1:])
+
+
+def test_output_token_budget_blocks_announced_tool_execution() -> None:
+    provider = ScriptedProvider([Response([
+        ContentBlock("tool_use", id="call-1", name="noop", input={}),
+    ], "tool_use", Usage(output_tokens=5))])
+    tool = NoopTool()
+    tool.run = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+        AssertionError("token budget must stop tool execution")
+    )
+    agent = Agent(provider, "model", "system", Registry([tool]))
+
+    with pytest.raises(BudgetExhaustedError) as raised:
+        agent.send("start", budgets=RunBudgets(
+            provider_calls=None, tool_calls=None, elapsed_seconds=None,
+            output_tokens=5,
+        ))
+
+    assert raised.value.reason_code == "budget_output_tokens_exhausted"
+    assert agent.run_counters.usage.output_tokens == 5
+    assert agent.run_counters.tool_calls == 0
+    assert agent.messages[-1].content[0].is_error is True
+
+
+def test_elapsed_budget_blocks_work_after_completed_provider_call(monkeypatch) -> None:
+    clock = [10.0]
+
+    class SlowProvider:
+        name = "slow"
+
+        def complete(self, request, cancellation=None):
+            clock[0] = 12.0
+            return Response([
+                ContentBlock("tool_use", id="call-1", name="noop", input={}),
+            ], "tool_use")
+
+    monkeypatch.setattr("hal.agent.time.monotonic", lambda: clock[0])
+    agent = Agent(SlowProvider(), "model", "system", Registry([NoopTool()]))
+
+    with pytest.raises(BudgetExhaustedError) as raised:
+        agent.send("start", budgets=RunBudgets(
+            provider_calls=None, tool_calls=None, elapsed_seconds=1,
+        ))
+
+    assert raised.value.reason_code == "budget_elapsed_seconds_exhausted"
+    assert agent.run_counters.elapsed_seconds == 2
+    assert agent.run_counters.tool_calls == 0
+    assert agent.messages[-1].content[0].is_error is True
+
+
+def test_successful_budgeted_run_records_outcome_and_run_usage() -> None:
+    provider = ScriptedProvider([Response(
+        [ContentBlock("text", text="Done.")], "end_turn",
+        Usage(input_tokens=3, output_tokens=2),
+    )])
+    events: list[Event] = []
+    agent = Agent(provider, "model", "system", Registry([]), on_event=events.append)
+
+    assert agent.send("start", budgets=RunBudgets()) == "Done."
+
+    assert agent.last_outcome is not None
+    assert agent.last_outcome.status == RunStatus.SUCCEEDED
+    assert agent.last_outcome.reason == "completed"
+    assert agent.last_outcome.final_text == "Done."
+    assert agent.last_outcome.counters.provider_calls == 1
+    assert agent.last_outcome.counters.usage.input_tokens == 3
+    budget_events = [event for event in events if event.kind == EventKind.BUDGET_UPDATED]
+    assert budget_events[-1].input_tokens == 3
+    assert budget_events[-1].output_tokens == 2
+
+
+def test_capability_filters_schema_and_execution_and_labels_outcome() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock(
+            "tool_use", id="call-1", name="noop", input={},
+        )], "tool_use"),
+        Response([ContentBlock("text", text="Done.")], "end_turn"),
+    ])
+    events: list[Event] = []
+    agent = Agent(
+        provider, "model", "system", Registry([NoopTool()]),
+        on_event=events.append,
+    )
+
+    assert agent.send("start", capability=resolve_capability("inspect")) == "Done."
+
+    assert provider.requests[0].tools == []
+    assert agent.messages[2].content[0].is_error is True
+    assert agent.last_outcome is not None
+    assert agent.last_outcome.capability == "inspect"
+    assert all(event.capability == "inspect" for event in events)
+
+
+def test_default_and_per_send_capabilities_are_intersected() -> None:
+    provider = ScriptedProvider([Response([
+        ContentBlock("text", text="Done."),
+    ], "end_turn")])
+    agent = Agent(
+        provider, "model", "system", Registry([NoopTool()]),
+        capability=Capability(
+            "default", "default", allowed_tools=frozenset({"noop", "other"}),
+        ),
+    )
+
+    assert agent.send(
+        "start",
+        capability=Capability(
+            "turn", "turn", allowed_tools=frozenset({"other"}),
+        ),
+    ) == "Done."
+
+    assert provider.requests[0].tools == []
+    assert agent.last_outcome is not None
+    assert agent.last_outcome.capability == "default+turn"

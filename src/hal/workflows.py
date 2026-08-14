@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from .agent import Agent
 from .cancellation import CancellationToken
 from .context import Phase
+from .harness import resolve_capability
 
 
 @dataclass(frozen=True, slots=True)
@@ -24,9 +25,11 @@ WORKFLOWS = {
     ),
 }
 
-_READ_ONLY_TOOLS = {"glob", "grep", "read_file", "git_status", "git_diff", "git_log"}
-_WORKFLOW_DENIED_GIT_TOOLS = {
-    "git_init", "git_stage", "git_unstage", "git_commit", "git_push",
+_PHASE_CAPABILITIES = {
+    "design": "inspect",
+    "plan": "plan",
+    "build": "change",
+    "review": "review",
 }
 _PHASE_HANDOFF_MAX_CHARS = 4_000
 
@@ -95,10 +98,8 @@ def run_workflow(
             prompt,
             f"/workflow {workflow.name} [{name}] {request}",
             cancellation,
-            allowed_tools=_READ_ONLY_TOOLS if name in {"design", "plan"} else None,
-            denied_tools=_WORKFLOW_DENIED_GIT_TOOLS,
-            protect_existing_files=name in {"build", "review"},
             include_history=False,
+            capability=resolve_capability(_PHASE_CAPABILITIES.get(name, "inspect")),
         )
         if not result.strip():
             raise RuntimeError(

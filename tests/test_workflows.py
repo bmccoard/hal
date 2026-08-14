@@ -25,10 +25,10 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
     class Agent:
         def send(self, prompt, display, cancellation, allowed_tools=None,
                  denied_tools=None, protect_existing_files=False,
-                 include_history=True):
+                 include_history=True, capability=None):
             calls.append((
                 prompt, display, cancellation, allowed_tools, denied_tools,
-                protect_existing_files, include_history,
+                protect_existing_files, include_history, capability,
             ))
             return display
 
@@ -45,13 +45,13 @@ def test_workflow_runs_phases_in_order_and_honors_overrides() -> None:
     assert [item[2] for item in progress] == ["design", "plan", "build", "review"]
     assert "CUSTOM DESIGN" in calls[0][0]
     assert all("Original workflow request:\nadd retries" in call[0] for call in calls)
-    assert "bash" not in calls[0][3]
-    assert calls[2][3] is None
-    assert all("git_commit" in call[4] for call in calls)
-    assert all("git_push" in call[4] for call in calls)
-    assert calls[0][5] is False
-    assert calls[2][5] is True
-    assert calls[3][5] is True
+    assert calls[0][7].name == "inspect"
+    assert calls[1][7].name == "plan"
+    assert calls[2][7].name == "change"
+    assert calls[3][7].name == "review"
+    assert all(call[3] is None for call in calls)
+    assert all(call[4] is None for call in calls)
+    assert all(call[5] is False for call in calls)
     assert all(call[6] is False for call in calls)
     assert "Prior phase handoffs" not in calls[0][0]
     assert "### design\n/workflow feature [design] add retries" in calls[1][0]

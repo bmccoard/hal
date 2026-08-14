@@ -34,6 +34,19 @@ bash_policy: normal
 compaction:
   context_window_tokens: 200000
 
+# Optional hard limits for each agent send. Omit `harness.budgets` to preserve
+# unlimited legacy behavior. Set an individual value to null to disable that limit.
+# harness:
+#   # Optional policy for ordinary sends: inspect, plan, change, or review.
+#   # Workflow phases add their own capability and cannot weaken this one.
+#   default_capability: change
+#   budgets:
+#     provider_calls: 50
+#     tool_calls: 200
+#     elapsed_seconds: 900
+#     input_tokens: null
+#     output_tokens: null
+
 features:
   agents_file: true     # Active: load applicable AGENTS.md instructions.
   skills: true          # Active: discover and expand HAL skills.

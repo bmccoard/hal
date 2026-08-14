@@ -8,6 +8,8 @@ from typing import Any
 
 import yaml
 
+from .harness import RunBudgets, resolve_capability
+
 
 DEFAULT_MODELS = {
     "anthropic": "claude-opus-5",
@@ -54,6 +56,8 @@ class Config:
     verbose: bool = False
     phases: dict[str, dict[str, str]] = field(default_factory=dict)
     providers: dict[str, ProviderProfile] = field(default_factory=dict)
+    harness_budgets: RunBudgets | None = None
+    default_capability: str = ""
     source: str = "embedded"
 
     def validate(self) -> None:
@@ -94,6 +98,12 @@ class Config:
                 self.model = DEFAULT_MODELS[backend]
         if self.context_window_tokens <= 0:
             raise ValueError("compaction.context_window_tokens must be positive")
+        if self.harness_budgets is not None and not isinstance(
+            self.harness_budgets, RunBudgets
+        ):
+            raise ValueError("harness.budgets must be a mapping or null")
+        if self.default_capability:
+            resolve_capability(self.default_capability)
         cleaned: list[str] = []
         for item in self.tool_approvals:
             item = str(item).strip()
@@ -158,6 +168,45 @@ def _bool(section: dict[str, Any], name: str, default: bool) -> bool:
     return value
 
 
+def _harness(data: dict[str, Any]) -> tuple[RunBudgets | None, str]:
+    if "harness" not in data or data["harness"] is None:
+        return None, ""
+    harness = data["harness"]
+    if not isinstance(harness, dict):
+        raise ValueError("harness must be a mapping")
+    unknown_harness = set(harness) - {"budgets", "default_capability"}
+    if unknown_harness:
+        names = ", ".join(sorted(str(name) for name in unknown_harness))
+        raise ValueError(f"unknown harness setting(s): {names}")
+    raw_name = harness.get("default_capability", "")
+    if raw_name is None:
+        name = ""
+    elif not isinstance(raw_name, str):
+        raise ValueError("harness.default_capability must be a string or null")
+    else:
+        name = raw_name.strip().lower()
+    if name:
+        resolve_capability(name)
+    parsed_budgets = None
+    if "budgets" in harness and harness["budgets"] is not None:
+        budgets = harness["budgets"]
+        if not isinstance(budgets, dict):
+            raise ValueError("harness.budgets must be a mapping or null")
+        fields = {
+            "provider_calls", "tool_calls", "elapsed_seconds",
+            "input_tokens", "output_tokens",
+        }
+        unknown_budgets = set(budgets) - fields
+        if unknown_budgets:
+            names = ", ".join(sorted(str(item) for item in unknown_budgets))
+            raise ValueError(f"unknown harness.budgets setting(s): {names}")
+        try:
+            parsed_budgets = RunBudgets(**budgets)
+        except ValueError as exc:
+            raise ValueError(f"harness.budgets: {exc}") from exc
+    return parsed_budgets, name
+
+
 def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Config:
     data = data or {}
     if "permissions" in data:
@@ -166,6 +215,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
     output = data.get("output") or {}
     compaction = data.get("compaction") or {}
     git = data.get("git") or {}
+    harness_budgets, default_capability = _harness(data)
     if not isinstance(git, dict):
         raise ValueError("git must be a mapping")
     extensions = data.get("extensions", [])
@@ -227,6 +277,8 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         verbose=_bool(output, "verbose", False),
         phases=dict(data.get("phases") or {}),
         providers=profiles,
+        harness_budgets=harness_budgets,
+        default_capability=default_capability,
         source=source,
     )
     cfg.validate()

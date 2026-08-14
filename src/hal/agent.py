@@ -8,6 +8,10 @@ import time
 from typing import NoReturn
 
 from .cancellation import CancelledError, CancellationToken, cancellation_or_default
+from .harness import (
+    BudgetReason, Capability, RunBudgets, RunCounters, RunOutcome, RunStatus,
+    compose_tool_policy,
+)
 from .models import ContentBlock, Message, Request, StreamDelta, Usage
 from .providers import Provider
 from .tools import Registry, bound_output
@@ -57,6 +61,22 @@ class NoProgressError(AgentError):
     """The provider repeatedly requested continuation without producing output."""
 
 
+class BudgetExhaustedError(AgentError):
+    """A harness run reached a hard limit before starting more work."""
+
+    def __init__(self, reason: BudgetReason, limit: int | float,
+                 partial_text: str = "") -> None:
+        self.reason = reason
+        self.limit = limit
+        super().__init__(
+            f"run exhausted {reason.value} budget ({limit})", partial_text,
+        )
+
+    @property
+    def reason_code(self) -> str:
+        return self.reason.code
+
+
 class EventKind(str, Enum):
     ASSISTANT_TEXT = "assistant_text"
     ASSISTANT_COMMENTARY = "assistant_commentary"
@@ -67,6 +87,7 @@ class EventKind(str, Enum):
     DONE = "done"
     ERROR = "error"
     MAX_TURNS_REACHED = "max_turns_reached"
+    BUDGET_UPDATED = "budget_updated"
 
 
 @dataclass(slots=True)
@@ -88,6 +109,12 @@ class Event:
     max_turns: int = 0
     error: BaseException | None = None
     partial_text: str = ""
+    reason: str = ""
+    provider_calls: int = 0
+    tool_calls: int = 0
+    input_tokens: int = 0
+    output_tokens: int = 0
+    capability: str = ""
 
 
 EventHandler = Callable[[Event], None]
@@ -103,7 +130,9 @@ class Agent:
 
     def __init__(self, provider: Provider, model: str, system: str, tools: Registry,
                  messages: list[Message] | None = None, usage: Usage | None = None,
-                 max_turns: int = 500, on_event: EventHandler | None = None) -> None:
+                 max_turns: int = 500, on_event: EventHandler | None = None,
+                 budgets: RunBudgets | None = None,
+                 capability: Capability | None = None) -> None:
         self.provider = provider
         self.model = model
         self.system = system
@@ -114,17 +143,75 @@ class Agent:
         self.on_event = on_event or (lambda _event: None)
         self.event_errors: list[Exception] = []
         self._send_started = 0.0
+        self.budgets = budgets
+        self.capability = capability
+        self.run_counters = RunCounters()
+        self.last_outcome: RunOutcome | None = None
+        self._active_budgets: RunBudgets | None = None
+        self._active_capability = ""
 
     def send(self, text: str, display_text: str = "",
              cancellation: CancellationToken | None = None,
              allowed_tools: set[str] | None = None,
              denied_tools: set[str] | None = None,
              protect_existing_files: bool = False,
-             include_history: bool = True) -> str:
+             include_history: bool = True,
+             budgets: RunBudgets | None = None,
+             capability: Capability | None = None) -> str:
+        """Run one user turn, optionally under hard harness budgets."""
+        self._send_started = time.monotonic()
+        self._active_budgets = budgets if budgets is not None else self.budgets
+        policies = tuple(item for item in (self.capability, capability) if item is not None)
+        policy = compose_tool_policy(
+            *policies, allowed_tools=allowed_tools, denied_tools=denied_tools,
+            protect_existing_files=protect_existing_files,
+        )
+        self._active_capability = "+".join(item.name for item in policies)
+        self.run_counters = RunCounters()
+        outcome = RunOutcome(
+            capability=self._active_capability, counters=self.run_counters,
+        )
+        self.last_outcome = outcome
+        try:
+            result = self._run_turn(
+                text, display_text, cancellation,
+                None if policy.allowed_tools is None else set(policy.allowed_tools),
+                set(policy.denied_tools), policy.protect_existing_files,
+                include_history,
+            )
+        except CancelledError:
+            outcome.status = RunStatus.CANCELLED
+            outcome.reason = "cancelled"
+            raise
+        except BudgetExhaustedError as exc:
+            outcome.status = RunStatus.BUDGET_EXHAUSTED
+            outcome.reason = exc.reason_code
+            outcome.final_text = exc.partial_text
+            raise
+        except BaseException as exc:
+            outcome.status = RunStatus.FAILED
+            outcome.reason = "agent_error" if isinstance(exc, AgentError) else "interrupted"
+            outcome.final_text = getattr(exc, "partial_text", "")
+            raise
+        else:
+            outcome.status = RunStatus.SUCCEEDED
+            outcome.reason = "completed"
+            outcome.final_text = result
+            return result
+        finally:
+            self._update_elapsed()
+            self._active_budgets = None
+            self._active_capability = ""
+
+    def _run_turn(self, text: str, display_text: str = "",
+                  cancellation: CancellationToken | None = None,
+                  allowed_tools: set[str] | None = None,
+                  denied_tools: set[str] | None = None,
+                  protect_existing_files: bool = False,
+                  include_history: bool = True) -> str:
         if not text.strip():
             raise AgentError("message is empty")
         cancellation = cancellation_or_default(cancellation)
-        self._send_started = time.monotonic()
         turn_start = len(self.messages)
         self.messages.append(Message("user", [ContentBlock("text", text=text)], display_text=display_text))
         final_parts: list[str] = []
@@ -145,6 +232,7 @@ class Agent:
 
             try:
                 cancellation.raise_if_cancelled()
+                self._before_provider_call(partial="\n".join(final_parts).strip())
                 request = Request(
                     model=self.model, system=self.system,
                     messages=list(self.messages if include_history else self.messages[turn_start:]),
@@ -157,6 +245,8 @@ class Agent:
                 else:
                     response = self.provider.complete(request, cancellation)
                 cancellation.raise_if_cancelled()
+            except BudgetExhaustedError as exc:
+                self._fail(exc)
             except CancelledError as exc:
                 self._append_streamed_partial(streamed_blocks)
                 self._emit(Event(
@@ -174,6 +264,8 @@ class Agent:
                 ))
                 raise error from exc
             self.usage.add(response.usage)
+            self.run_counters.usage.add(response.usage)
+            self._emit_budget_update()
             assistant_blocks = response.content
             for block in assistant_blocks:
                 if not block.text:
@@ -238,17 +330,23 @@ class Agent:
             interrupted: BaseException | None = None
             repeated_malformed: RepeatedMalformedToolCallError | None = None
             repeated_tool: RepeatedToolCallError | None = None
+            budget_exhausted: BudgetExhaustedError | None = None
             for call in calls:
                 self._emit(Event(
                     EventKind.TOOL_CALL, name=call.name, args=dict(call.input),
                     tool_use_id=call.id,
                 ))
                 tool_started = time.monotonic()
-                error = cancelled is not None or interrupted is not None
+                error = (
+                    cancelled is not None or interrupted is not None
+                    or budget_exhausted is not None
+                )
                 if interrupted is not None:
                     output = "skipped because an earlier tool interrupted the agent turn"
                 elif cancelled is not None:
                     output = "skipped because the agent turn was cancelled"
+                elif budget_exhausted is not None:
+                    output = "skipped because the harness budget was exhausted"
                 elif call.argument_error:
                     error = True
                     malformed_counts[call.name] = malformed_counts.get(call.name, 0) + 1
@@ -265,10 +363,15 @@ class Agent:
                 else:
                     try:
                         cancellation.raise_if_cancelled()
+                        self._before_tool_call(partial)
                         output = self.tools.run(
                             call.name, call.input, cancellation,
                             allowed_tools, denied_tools, protect_existing_files,
                         )
+                    except BudgetExhaustedError as exc:
+                        budget_exhausted = exc
+                        error = True
+                        output = f"not executed: {exc}"
                     except CancelledError as exc:
                         cancelled = exc
                         error = True
@@ -325,6 +428,8 @@ class Agent:
                     partial_text=partial,
                 ))
                 raise interrupted
+            if budget_exhausted is not None:
+                self._fail(budget_exhausted)
             if repeated_malformed is not None:
                 self._fail(repeated_malformed)
             if repeated_tool is not None:
@@ -339,7 +444,64 @@ class Agent:
         ))
         raise error
 
+    def _before_provider_call(self, partial: str) -> None:
+        self._check_continuation_budgets(partial)
+        budgets = self._active_budgets
+        if budgets is not None and budgets.provider_calls is not None:
+            if self.run_counters.provider_calls >= budgets.provider_calls:
+                raise BudgetExhaustedError(
+                    BudgetReason.PROVIDER_CALLS, budgets.provider_calls, partial,
+                )
+        self.run_counters.provider_calls += 1
+        self._emit_budget_update()
+
+    def _before_tool_call(self, partial: str) -> None:
+        self._check_continuation_budgets(partial)
+        budgets = self._active_budgets
+        if budgets is not None and budgets.tool_calls is not None:
+            if self.run_counters.tool_calls >= budgets.tool_calls:
+                raise BudgetExhaustedError(
+                    BudgetReason.TOOL_CALLS, budgets.tool_calls, partial,
+                )
+        self.run_counters.tool_calls += 1
+        self._emit_budget_update()
+
+    def _check_continuation_budgets(self, partial: str) -> None:
+        budgets = self._active_budgets
+        if budgets is None:
+            return
+        elapsed = self._update_elapsed()
+        checks = (
+            (BudgetReason.ELAPSED_SECONDS, elapsed, budgets.elapsed_seconds),
+            (BudgetReason.INPUT_TOKENS, self.run_counters.usage.input_tokens, budgets.input_tokens),
+            (BudgetReason.OUTPUT_TOKENS, self.run_counters.usage.output_tokens, budgets.output_tokens),
+        )
+        for reason, value, limit in checks:
+            if limit is not None and value >= limit:
+                raise BudgetExhaustedError(reason, limit, partial)
+
+    def _update_elapsed(self) -> float:
+        if self._send_started:
+            self.run_counters.elapsed_seconds = max(
+                0.0, time.monotonic() - self._send_started,
+            )
+        return self.run_counters.elapsed_seconds
+
+    def _emit_budget_update(self) -> None:
+        if self._active_budgets is None:
+            return
+        usage = self.run_counters.usage
+        self._emit(Event(
+            EventKind.BUDGET_UPDATED,
+            provider_calls=self.run_counters.provider_calls,
+            tool_calls=self.run_counters.tool_calls,
+            input_tokens=usage.input_tokens,
+            output_tokens=usage.output_tokens,
+        ))
+
     def _emit(self, event: Event) -> None:
+        if not event.capability:
+            event.capability = self._active_capability
         if self._send_started:
             event.elapsed_ms = int((time.monotonic() - self._send_started) * 1000)
         try:
@@ -419,5 +581,9 @@ class Agent:
         self._emit(Event(
             EventKind.ERROR, text=str(error), error=error,
             partial_text=error.partial_text,
+            reason=(
+                error.reason_code
+                if isinstance(error, BudgetExhaustedError) else ""
+            ),
         ))
         raise error

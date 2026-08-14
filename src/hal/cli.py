@@ -17,6 +17,7 @@ from .config import Config, load_config
 from .context import build_system, expand_user_input, load_skills, resolve_phases
 from .extensions import load_extensions
 from .git import GitError, create_git_backend
+from .harness import resolve_capability
 from .providers import ProviderError, create_provider
 from .sayings import startup_saying
 from .sessions import Metadata, Session, SessionStore, short_session_id
@@ -131,7 +132,11 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
     load_extensions(registry, config.extensions, cwd, root, config.extension_config)
     agent = Agent(provider, config.model, system, registry,
                   messages=session.messages if session else None, usage=session.usage if session else None,
-                  on_event=event_handler or event)
+                  on_event=event_handler or event, budgets=config.harness_budgets,
+                  capability=(
+                      resolve_capability(config.default_capability)
+                      if config.default_capability else None
+                  ))
     return agent, skills, phases
 
 

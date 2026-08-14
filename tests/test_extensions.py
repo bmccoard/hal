@@ -77,6 +77,7 @@ def test_load_extensions_rejects_non_tools_and_collisions(tmp_path: Path, monkey
 
 def test_cli_agent_factory_loads_configured_extensions(tmp_path: Path, monkeypatch) -> None:
     from hal.cli import _make_agent
+    from hal.harness import RunBudgets
 
     class Provider:
         streaming_enabled = True
@@ -97,11 +98,15 @@ def test_cli_agent_factory_loads_configured_extensions(tmp_path: Path, monkeypat
         model="test-model",
         extensions=["example"],
         extension_config={"example": {"value": 1}},
+        harness_budgets=RunBudgets(provider_calls=7),
+        default_capability="inspect",
     )
 
     agent, _, _ = _make_agent(config, tmp_path)
 
     assert agent.tools is registry
+    assert agent.budgets == RunBudgets(provider_calls=7)
+    assert agent.capability.name == "inspect"
     assert calls == [(
         registry, ["example"], tmp_path, tmp_path,
         {"example": {"value": 1}},
