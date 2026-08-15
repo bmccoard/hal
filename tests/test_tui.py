@@ -297,8 +297,6 @@ def test_large_paste_is_collapsed_then_expanded_exactly_on_submit(tmp_path: Path
             composer.cursor_location = (1, 0)
             composer.post_message(events.Paste(pasted))
             await pilot.pause()
-            await pilot.click("#allow")  # confirm "Paste anyway" warning dialog
-            await pilot.pause()
 
             assert pasted not in composer.text
             assert composer.text.startswith("Before\n[Pasted block 1 · ")
@@ -328,8 +326,6 @@ def test_large_pasted_command_is_data_not_ui_command(tmp_path: Path) -> None:
         async with app.run_test(size=(100, 32)) as pilot:
             composer = app.query_one("#composer", Composer)
             composer.post_message(events.Paste(pasted))
-            await pilot.pause()
-            await pilot.click("#allow")  # confirm "Paste anyway" warning dialog
             await pilot.pause()
             assert composer.text.startswith("[Pasted block")
             app.action_submit()
@@ -363,8 +359,8 @@ def test_large_local_clipboard_paste_uses_collapsed_block(
     asyncio.run(scenario())
 
 
-def test_large_paste_warning_dialog_confirm_stores_marker(tmp_path: Path) -> None:
-    """Confirming the large-paste warning stores the text as a collapsed marker."""
+def test_large_terminal_paste_stores_marker_without_modal(tmp_path: Path) -> None:
+    """Terminal paste behaves like clipboard paste, including on Windows Terminal."""
     app, agent, _store = _app(tmp_path)
     pasted = "x" * 5_120  # exactly at the 5 KiB threshold
 
@@ -373,30 +369,9 @@ def test_large_paste_warning_dialog_confirm_stores_marker(tmp_path: Path) -> Non
             composer = app.query_one("#composer", Composer)
             composer.post_message(events.Paste(pasted))
             await pilot.pause()
-            # Warning dialog should be visible; click "Paste anyway"
-            await pilot.click("#allow")
-            await pilot.pause()
+            assert app.screen is app.screen_stack[0]
             assert composer.text.startswith("[Pasted block 1 · ")
             assert composer.expand_pastes(composer.text) == pasted
-            app.action_safe_quit()
-
-    asyncio.run(scenario())
-
-
-def test_large_paste_warning_dialog_cancel_discards(tmp_path: Path) -> None:
-    """Cancelling the large-paste warning leaves the composer unchanged."""
-    app, agent, _store = _app(tmp_path)
-    pasted = "y" * 5_120
-
-    async def scenario() -> None:
-        async with app.run_test(size=(100, 32)) as pilot:
-            composer = app.query_one("#composer", Composer)
-            composer.post_message(events.Paste(pasted))
-            await pilot.pause()
-            # Warning dialog should be visible; click "Cancel"
-            await pilot.click("#deny")
-            await pilot.pause()
-            assert composer.text == ""
             app.action_safe_quit()
 
     asyncio.run(scenario())
@@ -419,6 +394,27 @@ def test_windows_ctrl_v_uses_native_clipboard(monkeypatch, tmp_path: Path) -> No
     asyncio.run(scenario())
 
 
+def test_windows_f4_bypasses_terminal_for_large_clipboard_paste(
+    monkeypatch, tmp_path: Path,
+) -> None:
+    app, agent, _store = _app(tmp_path)
+    pasted = "native clipboard ✓\n" * 10_000
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            monkeypatch.setattr("hal.tui.os.name", "nt")
+            monkeypatch.setattr("hal.tui.read_windows_unicode", lambda: pasted)
+            await pilot.press("f4")
+            composer = app.query_one("#composer", Composer)
+            assert app.screen is app.screen_stack[0]
+            assert composer.text.startswith("[Pasted block 1 · ")
+            assert composer.expand_pastes(composer.text) == pasted
+            assert agent.prompts == []
+            app.action_safe_quit()
+
+    asyncio.run(scenario())
+
+
 def test_tui_composer_buttons_do_not_overlap_footer(tmp_path: Path) -> None:
     app, _agent, _store = _app(tmp_path)
 
@@ -426,11 +422,15 @@ def test_tui_composer_buttons_do_not_overlap_footer(tmp_path: Path) -> None:
         async with app.run_test(size=(100, 32)):
             footer = app.query_one(Footer)
             controls = app.query_one("#composer-controls")
-            buttons = [app.query_one(f"#{name}", Button) for name in ("newline", "cancel", "send")]
+            buttons = [
+                app.query_one(f"#{name}", Button)
+                for name in ("paste", "newline", "cancel", "send")
+            ]
 
             hint = str(app.query_one("#composer-hint").render())
-            assert hint == "Enter/F2 send · Ctrl+J new line"
+            assert hint == "Enter/F2 send · Ctrl+J new line · F4 paste"
             assert "Shift+Enter" not in hint
+            assert app.query_one("#paste", Button).label.plain == "Paste"
             assert app.query_one("#newline", Button).label.plain == "Newline"
             assert app.query_one("#newline", Button).region.width == 12
             assert controls.region.bottom <= footer.region.y

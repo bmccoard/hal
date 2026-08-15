@@ -1,6 +1,6 @@
 provider: openrouter
-# model: openai/gpt-oss-120b
-model: tencent/hy3-preview
+model: openai/gpt-oss-120b
+# model: tencent/hy3-preview
 # model: openai/gpt-4o-mini
 # model: openai/gpt-oss-20b:free
 

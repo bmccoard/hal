@@ -297,7 +297,8 @@ test command itself. The model normally fulfills that request with its shell
 tool.
 
 The TUI uses plain `Enter` or `F2` to send. Use `Ctrl+J`, `F3`, `Shift+Enter`,
-or the visible **New line** button to add a line. `Ctrl-C` or
+or the visible **New line** button to add a line. Use `F4` or the visible **Paste**
+button to read the clipboard directly. `Ctrl-C` or
 `Escape` cancels active work, `Ctrl+L` clears the
 conversation, and `Ctrl+Q` quits safely. Some terminals—especially when VS Code
 has claimed a shortcut—never send modified Enter combinations to terminal apps;
@@ -311,6 +312,8 @@ memory and expands it unchanged only when the message is sent; pasted slash comm
 and shell-looking lines remain message data rather than executing automatically.
 On Windows, `Ctrl+V` reads Unicode text directly from the native clipboard; terminal
 bracketed paste and Textual's local clipboard remain available on other platforms.
+If Windows Terminal intercepts `Ctrl+V` or shows its large-paste warning, use `F4`
+or **Paste** to bypass the terminal host and read the clipboard directly.
 
 Transcript text may be selected with `Shift`+drag and copied with `Ctrl+Shift+C`.
 HAL also provides an internal selection-copy action; on Windows that action uses the
