@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import importlib.util
 import json
 import os
@@ -24,6 +25,29 @@ from .sessions import Metadata, Session, SessionStore, short_session_id
 from .journal import RunJournalStore
 from .tools import BashTool, default_registry, workspace_root
 from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
+from .workflow_inspect import (
+    inspect_builtin_workflow, inspect_repository_workflow, workflow_summary,
+)
+from .workflow_schema import discover_workflows, resolve_workflow_names
+from .workflow_artifacts import WorkflowArtifactStore
+from .workflow_approvals import (
+    WorkflowApprovalDecision, authorize_approval_decision, pending_approval,
+)
+from .workflow_budgets import WorkflowBudgets, WorkflowUsage
+from .workflow_nodes import WorkflowNodeDispatcher
+from .workflow_migration import migrate_workflow_definition
+from .workflow_policy import (
+    WorkflowTrustGrant, require_workflow_trust, workflow_required_effects,
+    workflow_requires_trust,
+)
+from .workflow_publication import require_publication_isolation
+from .workflow_runtime import materialize_workflow_inputs
+from .workflow_worktrees import (
+    WorkflowWorkspaceLock, cleanup_isolated_worktree, create_isolated_worktree, inspect_worktree,
+    preflight_worktree, validate_worktree_resume,
+)
+from .workflow_resume import resume_persisted_workflow
+from .workflow_state import WorkflowRunStore
 from .subagents import DelegateTool
 
 
@@ -42,6 +66,13 @@ USAGE:
   hal doctor         Check local config and environment
   hal harness [name] [--json]
                      Inspect resolved harness policy without starting a model run
+  hal workflow list [--json]
+  hal workflow inspect <name> [--json]
+                     Inspect workflow definitions without executing them
+  hal workflow run <name> [--input name=value] [--trust-digest sha256] [--json]
+                     Start a validated repository workflow in the current workspace
+  hal workflow runs <list|status|events|resume|retry-node|cancel|archive> ...
+                     Inspect or recover durable workflow runs
   hal resume <selector>
                      Resume by full ID or unique short selector
   hal version        Show the HAL version (also -v, --version)
@@ -49,7 +80,7 @@ USAGE:
 
 CONFIG:
   Reads hal.yaml -> ~/.hal/config.yaml -> defaults.
-  Providers: anthropic (default), openai, openrouter, or google.
+  Providers: anthropic (default), openai, openrouter, google, or meta.
 
 HEADLESS RUN:
   hal run --json --timeout 10m "Review this repo without changing files"
@@ -238,6 +269,511 @@ def run_harness(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
         print(f"Verification: {', '.join(payload['verification']) or 'none'}", file=stdout)
         print(f"Repair attempts: {config.repair_attempts}", file=stdout)
     return 0
+
+
+def run_workflow_inspection(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
+    """List or inspect workflow definitions without executing any node."""
+    if args and args[0] == "runs":
+        return run_workflow_runs(args[1:], stdout, stderr)
+    if args and args[0] == "run":
+        return run_repository_workflow(args[1:], stdout, stderr)
+    json_output = "--json" in args
+    positional = [item for item in args if item != "--json"]
+    if any(item.startswith("-") for item in positional):
+        print("usage: hal workflow list [--json] | inspect <name> [--json]", file=stderr)
+        return 2
+    if not positional or positional[0] not in {"list", "inspect"}:
+        print("usage: hal workflow list [--json] | inspect <name> [--json]", file=stderr)
+        return 2
+    action = positional[0]
+    if (action == "list" and len(positional) != 1) or (
+        action == "inspect" and len(positional) != 2
+    ):
+        print("usage: hal workflow list [--json] | inspect <name> [--json]", file=stderr)
+        return 2
+    root = workspace_root(Path.cwd())
+    try:
+        repository = discover_workflows(root)
+        names = resolve_workflow_names(frozenset(WORKFLOWS), repository)
+        payloads = {
+            name: (
+                inspect_builtin_workflow(WORKFLOWS[name])
+                if name in WORKFLOWS else inspect_repository_workflow(repository[name])
+            )
+            for name in names
+        }
+    except (OSError, ValueError) as exc:
+        print(f"workflow: {exc}", file=stderr)
+        return 1
+    if action == "inspect":
+        name = positional[1].lower()
+        if name not in payloads:
+            print(
+                f"workflow: unknown workflow {name!r} (available: {', '.join(names)})",
+                file=stderr,
+            )
+            return 1
+        payload: Any = payloads[name]
+    else:
+        payload = {
+            "workspace": str(root),
+            "workflows": [workflow_summary(payloads[name]) for name in names],
+        }
+    if json_output:
+        print(json.dumps(payload, indent=2), file=stdout)
+    elif action == "list":
+        for item in payload["workflows"]:
+            effects = ",".join(item["effects"]) or "none"
+            print(
+                f"{item['name']}\t{item['origin']}\ttrust={str(item['trust_required']).lower()}"
+                f"\teffects={effects}\t{item['description']}",
+                file=stdout,
+            )
+    else:
+        print(json.dumps(payload, indent=2), file=stdout)
+    return 0
+
+
+def run_repository_workflow(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
+    """Start one explicitly named repository workflow under pinned trust."""
+    parser = argparse.ArgumentParser(prog="hal workflow run", add_help=True)
+    parser.add_argument("name")
+    parser.add_argument("--input", action="append", default=[])
+    parser.add_argument("--trust-digest")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    try:
+        options = parser.parse_args(args)
+    except SystemExit as exc:
+        return int(exc.code)
+    root = workspace_root(Path.cwd())
+    try:
+        definitions = discover_workflows(root)
+        if options.name not in definitions:
+            available = ", ".join(definitions) or "none"
+            raise ValueError(
+                f"unknown repository workflow {options.name!r} (available: {available})"
+            )
+        definition = definitions[options.name]
+        require_publication_isolation(definition)
+        if (
+            any(node.type == "approval" for node in definition.nodes)
+            and definition.execution.workspace != "worktree"
+        ):
+            raise ValueError(
+                "approval workflows require execution.workspace: worktree so reviewed "
+                "workspace state can be checkpointed"
+            )
+        if (
+            any(
+                node.type == "git"
+                and node.config.get("operation") in {"stage", "commit", "prepare_branch"}
+                for node in definition.nodes
+            )
+            and definition.execution.workspace != "worktree"
+        ):
+            raise ValueError(
+                "mutating Git workflow nodes require execution.workspace: worktree"
+            )
+        supplied = _parse_workflow_cli_inputs(definition, options.input)
+        validated_inputs = materialize_workflow_inputs(definition, supplied)
+        grant = None
+        if options.trust_digest is not None:
+            grant = WorkflowTrustGrant(
+                definition.name, root.resolve(), options.trust_digest,
+                workflow_required_effects(definition),
+            )
+        try:
+            require_workflow_trust(definition, grant)
+        except PermissionError as exc:
+            raise PermissionError(
+                f"{exc}; inspect it with 'hal workflow inspect {definition.name}' and "
+                f"rerun with --trust-digest {definition.source.digest}"
+            ) from exc
+        cancellation = CancellationToken()
+        config = None
+        agent = None
+        needs_agent = _workflow_needs_agent(definition, definitions)
+        if needs_agent:
+            config = _load(root, stderr)
+            if config is None:
+                raise ValueError("could not load HAL configuration for workflow agent nodes")
+        store = WorkflowRunStore(root / ".hal" / "runs")
+        state = store.create(
+            definition, validated_inputs, root, definition.execution.budgets,
+        )
+        if workflow_requires_trust(definition):
+            state.attach_trust(
+                definition.source.digest,
+                tuple(sorted(effect.value for effect in workflow_required_effects(definition))),
+            )
+        execution_root = root
+        if definition.execution.workspace == "worktree":
+            preflight = preflight_worktree(
+                root, state.run_id, definition.name, cancellation,
+            )
+            execution_root = create_isolated_worktree(preflight, cancellation)
+            state.attach_workspace(
+                execution_root, branch=preflight.branch, head=preflight.head,
+                source_branch=preflight.source_branch,
+                source_dirty_paths=preflight.dirty_paths,
+            )
+            identity = inspect_worktree(root, execution_root, cancellation)
+            state.update_workspace_checkpoint(**_worktree_snapshot(identity))
+        if needs_agent:
+            assert config is not None
+            agent, _skills, _phases = _make_agent(config, execution_root)
+        artifacts = WorkflowArtifactStore(
+            root / ".hal" / "runs" / "artifacts" / state.run_id
+        )
+        dispatcher = WorkflowNodeDispatcher(
+            execution_root, cancellation, agent=agent,
+            capabilities=config.capabilities if config is not None else {},
+            budgets=definition.execution.budgets,
+            artifact_store=artifacts, workflows=definitions,
+            git_backend=getattr(config, "git_backend", "auto"),
+            external_intent=state.record_external_intent,
+        )
+        from .workflow_state import execute_persisted_workflow
+        lock = (
+            WorkflowWorkspaceLock(root / ".hal" / "locks", execution_root, state.run_id)
+            if workflow_requires_trust(definition) else nullcontext()
+        )
+        snapshotter = (
+            lambda: _worktree_snapshot(inspect_worktree(root, execution_root, cancellation))
+        ) if definition.execution.workspace == "worktree" else None
+        with cancel_on_sigint(cancellation), dispatcher.workflow_scope(definition), lock:
+            result = execute_persisted_workflow(
+                definition, validated_inputs, dispatcher, state,
+                usage=lambda: dispatcher.ledger.usage,
+                workspace_snapshot=snapshotter,
+            )
+        payload = {
+            "run_id": state.run_id,
+            "workflow": definition.name,
+            "digest": definition.source.digest,
+            "status": result.status.value,
+            "nodes": [
+                {"id": item.node_id, "status": item.status.value, "reason": item.reason}
+                for item in result.nodes
+            ],
+        }
+    except (FileNotFoundError, OSError, PermissionError, ValueError) as exc:
+        print(f"workflow run: {exc}", file=stderr)
+        return 1
+    if options.json_output:
+        print(json.dumps(payload, indent=2), file=stdout)
+    else:
+        print(f"Workflow run: {payload['run_id']}", file=stdout)
+        print(f"Status: {payload['status']}", file=stdout)
+        for node in payload["nodes"]:
+            print(f"{node['id']}\t{node['status']}\t{node['reason'] or ''}", file=stdout)
+    return 0 if result.status.value in {"succeeded", "waiting"} else 1
+
+
+def _parse_workflow_cli_inputs(definition, values: list[str]) -> dict[str, object]:
+    supplied: dict[str, object] = {}
+    for value in values:
+        name, separator, raw = value.partition("=")
+        if not separator or not name:
+            raise ValueError("workflow inputs must use --input name=value")
+        if name in supplied:
+            raise ValueError(f"workflow input {name!r} was supplied more than once")
+        item = definition.inputs.get(name)
+        if item is None:
+            raise ValueError(f"unknown workflow input {name!r}")
+        try:
+            if item.type == "boolean":
+                if raw.lower() not in {"true", "false"}:
+                    raise ValueError("expected true or false")
+                parsed: object = raw.lower() == "true"
+            elif item.type == "integer":
+                parsed = int(raw)
+            elif item.type in {"json", "check_result"}:
+                parsed = json.loads(raw)
+            else:
+                parsed = raw
+        except (ValueError, json.JSONDecodeError) as exc:
+            raise ValueError(
+                f"workflow input {name!r} is not valid {item.type}: {exc}"
+            ) from exc
+        supplied[name] = parsed
+    return supplied
+
+
+def _workflow_needs_agent(definition, definitions, seen=frozenset()) -> bool:
+    if definition.name in seen:
+        return False
+    seen = seen | {definition.name}
+    for node in definition.nodes:
+        if node.type == "agent":
+            return True
+        if node.type == "workflow" and node.config["workflow"] in definitions:
+            if _workflow_needs_agent(definitions[node.config["workflow"]], definitions, seen):
+                return True
+    return False
+
+
+def run_workflow_runs(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
+    """Inspect and recover durable workflow runs through one CLI contract."""
+    json_output = "--json" in args
+    positional = [item for item in args if item != "--json"]
+    if positional and positional[0] in {
+        "approval", "approve", "deny", "request-changes", "cancel-approval",
+    }:
+        return _run_workflow_approval_cli(args, stdout, stderr)
+    usage_text = (
+        "usage: hal workflow runs list [--json] | status|events|resume|cancel|archive "
+        "<run-id> [--json] | retry-node <run-id> <node-id> [--json] | cleanup <run-id> | "
+        "migrate <run-id> <workflow-name> [--json] | trust <run-id> <digest> [--json]"
+    )
+    if not positional or any(item.startswith("-") for item in positional):
+        print(usage_text, file=stderr)
+        return 2
+    action = positional[0]
+    expected = {"list": 1, "status": 2, "events": 2, "resume": 2,
+                "retry-node": 3, "migrate": 3, "trust": 3, "cancel": 2, "cleanup": 2,
+                "archive": 2}
+    if action not in expected or len(positional) != expected[action]:
+        print(usage_text, file=stderr)
+        return 2
+    root = workspace_root(Path.cwd())
+    store = WorkflowRunStore(root / ".hal" / "runs")
+    try:
+        if action == "list":
+            payload: object = [
+                {
+                    "run_id": state.run_id,
+                    "workflow": state.payload["workflow"]["name"],
+                    "status": state.payload["status"],
+                    "revision": state.payload["revision"],
+                    "updated_at": state.payload["updated_at"],
+                    "workspace": state.payload["workspace"]["path"],
+                }
+                for state in store.list()
+            ]
+        else:
+            run_id = positional[1]
+            state = store.load(run_id)
+            if action == "status":
+                payload = state.payload
+            elif action == "events":
+                payload = {
+                    "run_id": run_id, "events": state.payload["events"],
+                }
+            elif action == "cancel":
+                state.request_cancel()
+                payload = {"run_id": run_id, "status": state.payload["status"],
+                           "cancellation_requested": True}
+            elif action == "archive":
+                archived = store.archive(run_id)
+                payload = {"run_id": run_id, "archived": True, "path": str(archived)}
+            elif action == "cleanup":
+                if state.payload["status"] not in {
+                    "succeeded", "failed", "denied", "cancelled", "timed_out",
+                    "budget_exhausted", "interrupted",
+                }:
+                    raise ValueError("workflow worktree cleanup requires a terminal run")
+                workspace = state.payload["workspace"]
+                if not workspace.get("branch"):
+                    raise ValueError("workflow run does not own an isolated worktree")
+                repository = Path(state.payload["workflow"]["repository"])
+                cleanup_isolated_worktree(repository, workspace)
+                state.mark_workspace_cleaned()
+                payload = {"run_id": run_id, "cleaned": True}
+            elif action == "migrate":
+                repository = Path(state.payload["workflow"]["repository"])
+                definitions = discover_workflows(repository)
+                target = positional[2]
+                if target not in definitions:
+                    raise ValueError(f"unknown migration workflow {target!r}")
+                migrate_workflow_definition(
+                    state, definitions[target], actor="local-cli",
+                    reason="explicit CLI migration",
+                )
+                payload = {
+                    "run_id": run_id, "migrated": True,
+                    "digest": state.payload["workflow"]["digest"],
+                    "revision": state.payload["revision"],
+                }
+            elif action == "trust":
+                repository = Path(state.payload["workflow"]["repository"])
+                definitions = discover_workflows(repository)
+                name = state.payload["workflow"]["name"]
+                if name not in definitions:
+                    raise ValueError(f"pinned workflow {name!r} is no longer available")
+                definition = definitions[name]
+                supplied_digest = positional[2]
+                if supplied_digest != definition.source.digest:
+                    raise ValueError("trust digest does not match the current workflow definition")
+                state.attach_trust(
+                    supplied_digest,
+                    tuple(sorted(
+                        effect.value for effect in workflow_required_effects(definition)
+                    )),
+                )
+                payload = {
+                    "run_id": run_id, "trusted": True,
+                    "digest": supplied_digest,
+                    "effects": state.payload["trust"]["effects"],
+                }
+            else:
+                retry_nodes = (
+                    frozenset({positional[2]}) if action == "retry-node" else frozenset()
+                )
+                payload = _resume_workflow_run(
+                    state, retry_nodes, stdout, stderr,
+                )
+    except (FileNotFoundError, OSError, PermissionError, ValueError) as exc:
+        print(f"workflow runs: {exc}", file=stderr)
+        return 1
+    if json_output:
+        print(json.dumps(payload, indent=2), file=stdout)
+    elif action == "list":
+        for item in payload:
+            print(
+                f"{item['run_id']}\t{item['status']}\t{item['workflow']}\t{item['updated_at']}",
+                file=stdout,
+            )
+    elif action == "events":
+        for event in payload["events"]:
+            print(
+                f"{event['sequence']}\t{event['timestamp']}\t{event['event']}\t"
+                f"{event.get('node_id', '')}\t{event.get('status', '')}",
+                file=stdout,
+            )
+    else:
+        print(json.dumps(payload, indent=2), file=stdout)
+    return 0
+
+
+def _run_workflow_approval_cli(
+    args: list[str], stdout: TextIO, stderr: TextIO,
+) -> int:
+    action = args[0]
+    parser = argparse.ArgumentParser(prog=f"hal workflow runs {action}")
+    parser.add_argument("run_id")
+    parser.add_argument("node_id")
+    parser.add_argument("--revision")
+    parser.add_argument("--approver")
+    parser.add_argument("--feedback", default="")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    try:
+        options = parser.parse_args(args[1:])
+    except SystemExit as exc:
+        return int(exc.code)
+    root = workspace_root(Path.cwd())
+    store = WorkflowRunStore(root / ".hal" / "runs")
+    try:
+        state = store.load(options.run_id)
+        approval = pending_approval(state, options.node_id)
+        if action == "approval":
+            payload: object = approval
+        else:
+            if not options.revision or not options.approver:
+                raise ValueError("approval decisions require --revision and --approver")
+            workspace = state.payload["workspace"]
+            if workspace.get("branch"):
+                identity = inspect_worktree(root, Path(workspace["path"]))
+                state.update_workspace_checkpoint(**_worktree_snapshot(identity))
+            decision_name = {
+                "approve": "approve", "deny": "deny",
+                "request-changes": "request_changes", "cancel-approval": "cancel",
+            }[action]
+            repository = Path(state.payload["workflow"]["repository"])
+            definitions = discover_workflows(repository)
+            workflow_name = state.payload["workflow"]["name"]
+            if workflow_name not in definitions:
+                raise ValueError(f"pinned workflow {workflow_name!r} is no longer available")
+            artifact_store = WorkflowArtifactStore(
+                repository / ".hal" / "runs" / "artifacts" / state.run_id
+            )
+            authorize_approval_decision(state, definitions[workflow_name], artifact_store,
+                WorkflowApprovalDecision(
+                options.node_id, decision_name, options.approver,
+                options.feedback, options.revision,
+            ))
+            if decision_name == "approve":
+                payload = _resume_workflow_run(state, frozenset(), stdout, stderr)
+            else:
+                payload = {
+                    "run_id": state.run_id, "node_id": options.node_id,
+                    "decision": decision_name, "status": state.payload["status"],
+                }
+    except (FileNotFoundError, OSError, PermissionError, ValueError) as exc:
+        print(f"workflow approval: {exc}", file=stderr)
+        return 1
+    if options.json_output:
+        print(json.dumps(payload, indent=2), file=stdout)
+    else:
+        print(json.dumps(payload, indent=2), file=stdout)
+    return 0
+
+
+def _resume_workflow_run(
+    state, retry_nodes: frozenset[str], stdout: TextIO, stderr: TextIO,
+) -> dict[str, object]:
+    payload = state.payload
+    repository = Path(payload["workflow"]["repository"])
+    workspace = Path(payload["workspace"]["path"])
+    definitions = discover_workflows(repository)
+    name = payload["workflow"]["name"]
+    if name not in definitions:
+        raise ValueError(f"pinned workflow {name!r} is no longer available")
+    require_publication_isolation(definitions[name])
+    config = _load(workspace, stderr)
+    if config is None:
+        raise ValueError("could not load HAL configuration for the workflow workspace")
+    agent, _skills, _phases = _make_agent(config, workspace)
+    budgets = WorkflowBudgets(**payload["budgets"])
+    prior_usage = WorkflowUsage(**payload["usage"])
+    cancellation = CancellationToken()
+    is_worktree = bool(payload["workspace"].get("branch"))
+    if is_worktree:
+        identity = inspect_worktree(repository, workspace, cancellation)
+        validate_worktree_resume(
+            payload["workspace"], identity,
+            allow_checkpoint_change=bool(retry_nodes),
+        )
+    artifact_store = WorkflowArtifactStore(
+        repository / ".hal" / "runs" / "artifacts" / state.run_id
+    )
+    dispatcher = WorkflowNodeDispatcher(
+        workspace, cancellation, agent=agent, capabilities=config.capabilities,
+        budgets=budgets, usage=prior_usage,
+        artifact_store=artifact_store,
+        workflows=definitions,
+        git_backend=config.git_backend,
+        external_intent=state.record_external_intent,
+    )
+    lock = (
+        WorkflowWorkspaceLock(repository / ".hal" / "locks", workspace, state.run_id)
+        if workflow_requires_trust(definitions[name]) else nullcontext()
+    )
+    snapshotter = (
+        lambda: _worktree_snapshot(inspect_worktree(repository, workspace, cancellation))
+    ) if is_worktree else None
+    with cancel_on_sigint(cancellation), lock:
+        result = resume_persisted_workflow(
+            state, definitions[name], dispatcher.artifact_store, dispatcher,
+            retry_nodes=retry_nodes,
+            usage=lambda: dispatcher.ledger.usage,
+            workspace_snapshot=snapshotter,
+        )
+    return {
+        "run_id": state.run_id,
+        "status": result.status.value,
+        "nodes": [
+            {"id": node.node_id, "status": node.status.value, "reason": node.reason}
+            for node in result.nodes
+        ],
+    }
+
+
+def _worktree_snapshot(identity) -> dict[str, object]:
+    return {
+        "head": identity.head, "branch": identity.branch,
+        "dirty_digest": identity.dirty_digest, "dirty_paths": identity.dirty_paths,
+    }
 
 
 def run_headless(args: list[str], stdin: TextIO, stdout: TextIO, stderr: TextIO) -> int:
@@ -667,6 +1203,7 @@ def main(argv: list[str] | None = None, stdin: TextIO = sys.stdin, stdout: TextI
     if command == "sessions": return run_sessions(rest, stdout, stderr)
     if command == "doctor": return run_doctor(stdout)
     if command == "harness": return run_harness(rest, stdout, stderr)
+    if command == "workflow": return run_workflow_inspection(rest, stdout, stderr)
     if command == "resume":
         if not rest: print("usage: hal resume <short-id-or-full-id>", file=stderr); return 2
         if len(rest) > 1: print("usage: hal resume <short-id-or-full-id>", file=stderr); return 2

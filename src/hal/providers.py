@@ -400,7 +400,7 @@ class OpenAIProvider(HTTPProvider):
             self.endpoint, self._payload(request),
             {"Authorization": f"Bearer {self.api_key}"}, cancellation,
         )
-        return _openai_response(data)
+        return _openai_response(data, self.name)
 
     def stream(self, request: Request, on_delta: Callable[[StreamDelta], None],
                cancellation: CancellationToken | None = None) -> Response:
@@ -444,15 +444,18 @@ class OpenAIProvider(HTTPProvider):
                     terminal = event.get("response") or {}
                 elif kind in {"response.failed", "error"}:
                     error = event.get("error") or (event.get("response") or {}).get("error") or event
-                    raise ProviderError(f"openai: {error.get('message', error) if isinstance(error, dict) else error}")
+                    raise ProviderError(
+                        f"{self.name}: "
+                        f"{error.get('message', error) if isinstance(error, dict) else error}"
+                    )
         except StreamingUnsupported:
             return super().stream(request, on_delta, cancellation)
         except BufferedStreamResponse as exc:
-            response = _openai_response(exc.data)
+            response = _openai_response(exc.data, self.name)
             _emit_response_deltas(response, on_delta)
             return response
         if terminal is not None:
-            return _openai_response(terminal)
+            return _openai_response(terminal, self.name)
         blocks = [ContentBlock("text", text="".join(text_parts))] if text_parts else []
         for call in calls.values():
             blocks.append(_tool_call_block(
@@ -461,9 +464,9 @@ class OpenAIProvider(HTTPProvider):
         return Response(blocks, "tool_use" if calls else "end_turn")
 
 
-def _openai_response(data: dict[str, Any]) -> Response:
+def _openai_response(data: dict[str, Any], name: str = "openai") -> Response:
     if data.get("error"):
-        raise ProviderError(f"openai: {data['error'].get('message', data['error'])}")
+        raise ProviderError(f"{name}: {data['error'].get('message', data['error'])}")
     blocks: list[ContentBlock] = []
     saw_tool = False
     for item in data.get("output", []):
@@ -632,6 +635,31 @@ class OpenAICompatibleProvider(OpenRouterProvider):
         super().__init__(api_key, f"{api_base.rstrip('/')}/chat/completions", max_tokens_parameter)
 
 
+class MetaProvider(OpenAIProvider):
+    """Muse Spark through Meta Model API's Responses-compatible surface."""
+
+    name = "meta"
+    DEFAULT_API_BASE = "https://api.meta.ai/v1"
+
+    def __init__(self, api_key: str, api_base: str = "") -> None:
+        base = (
+            api_base or os.environ.get("META_API_BASE_URL", "").strip()
+            or self.DEFAULT_API_BASE
+        )
+        super().__init__(api_key, f"{base.rstrip('/')}/responses")
+
+    def _payload(self, request: Request, *, stream: bool = False) -> dict[str, Any]:
+        payload = super()._payload(request, stream=stream)
+        # These OpenAI-specific persistence and encrypted-reasoning options are
+        # not part of Meta's documented Responses request surface.
+        payload.pop("store", None)
+        payload.pop("include", None)
+        if not request.tools:
+            payload.pop("tools", None)
+            payload.pop("tool_choice", None)
+        return payload
+
+
 class GoogleProvider(HTTPProvider):
     name = "google"
 
@@ -775,7 +803,11 @@ def create_provider(config: Config) -> Provider:
         else:
             raise ProviderError(f"{profile.name}: unsupported provider protocol")
     else:
-        classes = {"anthropic": AnthropicProvider, "openai": OpenAIProvider, "openrouter": OpenRouterProvider, "google": GoogleProvider}
+        classes = {
+            "anthropic": AnthropicProvider, "openai": OpenAIProvider,
+            "openrouter": OpenRouterProvider, "google": GoogleProvider,
+            "meta": MetaProvider,
+        }
         provider = classes[backend](key)
     provider.streaming_enabled = config.streaming
     return provider

@@ -8,6 +8,7 @@ from .agent import Agent
 from .cancellation import CancellationToken
 from .context import Phase
 from .harness import resolve_capability
+from .workflow_schema import WorkflowIdentity, builtin_workflow_identity
 
 
 @dataclass(frozen=True, slots=True)
@@ -15,6 +16,11 @@ class Workflow:
     name: str
     description: str
     phases: tuple[str, ...]
+
+    @property
+    def identity(self) -> WorkflowIdentity:
+        definition = "\0".join((self.description, *self.phases))
+        return builtin_workflow_identity(self.name, definition)
 
 
 WORKFLOWS = {

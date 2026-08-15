@@ -293,6 +293,17 @@ def test_inline_api_key_takes_precedence_over_environment(monkeypatch) -> None:
     assert config.credential() == "inline-key"
 
 
+def test_meta_provider_uses_meta_key_and_default_model(monkeypatch) -> None:
+    monkeypatch.setenv("META_API_KEY", "meta-placeholder")
+
+    config = parse_config({"provider": "meta"})
+
+    assert config.backend() == "meta"
+    assert config.model == "muse-spark-1.2"
+    assert config.credential_env() == "META_API_KEY"
+    assert config.credential() == "meta-placeholder"
+
+
 def test_profile_accepts_max_completion_tokens_parameter() -> None:
     config = parse_config({
         "provider": "enterprise",

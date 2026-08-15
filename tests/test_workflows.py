@@ -7,6 +7,12 @@ from hal.harness import Capability
 from hal.workflows import WORKFLOWS, parse_workflow_command, run_workflow
 
 
+def test_builtin_workflow_has_stable_identity() -> None:
+    identity = WORKFLOWS["feature"].identity
+    assert identity.name == "feature"
+    assert len(identity.digest) == 64
+
+
 def test_parse_feature_workflow() -> None:
     workflow, request = parse_workflow_command("/workflow feature add retries")
     assert workflow is WORKFLOWS["feature"]

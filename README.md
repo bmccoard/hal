@@ -222,6 +222,22 @@ OPENROUTER_API_KEY=replace-with-your-openrouter-token
 When an OpenRouter configuration omits `model`, `OPENROUTER_MODEL` is used
 before the built-in default.
 
+Meta Model API uses a Responses-compatible endpoint:
+
+```yaml
+provider: meta
+model: muse-spark-1.2-contributor
+```
+
+```dotenv
+META_API_KEY=replace-with-your-meta-model-api-key
+```
+
+HAL defaults to Meta's endpoint at `https://api.meta.ai/v1/responses`. During the
+public preview its base URL can be overridden
+without putting the endpoint in source-controlled configuration by setting
+`META_API_BASE_URL` in `.env`.
+
 Custom OpenAI-compatible gateways can be defined as named profiles. Keep private
 endpoint URLs and credentials in `.env`; `hal.yaml` contains only their environment
 variable names:
@@ -270,6 +286,7 @@ process environment. Built-in credential names are:
 - `OPENAI_API_KEY`
 - `OPENROUTER_API_KEY`
 - `GOOGLE_API_KEY`
+- `META_API_KEY`
 
 OpenAI API-key auth is supported. The Go CLI's experimental ChatGPT/Codex
 device-code login is intentionally not emulated because that flow relies on a

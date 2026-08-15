@@ -20,6 +20,7 @@ DEFAULT_MODELS = {
     "openai": "gpt-5.6-sol",
     "openrouter": "anthropic/claude-sonnet-5",
     "google": "gemini-3.5-flash",
+    "meta": "muse-spark-1.2",
 }
 PROVIDERS = frozenset(DEFAULT_MODELS)
 _ENV_LINE = re.compile(r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$")
@@ -171,6 +172,7 @@ class Config:
         return {
             "anthropic": "ANTHROPIC_API_KEY", "openai": "OPENAI_API_KEY",
             "openrouter": "OPENROUTER_API_KEY", "google": "GOOGLE_API_KEY",
+            "meta": "META_API_KEY",
         }[self.backend()]
 
     def credential(self) -> str:

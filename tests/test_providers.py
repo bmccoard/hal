@@ -13,6 +13,7 @@ from hal.providers import (
     AnthropicProvider,
     GoogleProvider,
     OpenAICompatibleProvider,
+    MetaProvider,
     OpenAIProvider,
     OpenRouterProvider,
     ProviderError,
@@ -55,6 +56,56 @@ def test_provider_respects_global_streaming_disable() -> None:
     })
 
     assert create_provider(config).streaming_enabled is False
+
+
+def test_meta_provider_uses_responses_endpoint_and_bearer_key(monkeypatch) -> None:
+    monkeypatch.setenv("META_API_KEY", "meta-placeholder")
+    monkeypatch.delenv("META_API_BASE_URL", raising=False)
+    config = parse_config({
+        "provider": "meta", "model": "muse-spark-1.2-contributor",
+    })
+    provider = create_provider(config)
+    assert isinstance(provider, MetaProvider)
+    assert provider.endpoint == "https://api.meta.ai/v1/responses"
+
+    captured = {}
+    def fake_post(url, payload, headers, cancellation=None):
+        captured.update(url=url, payload=payload, headers=headers)
+        return {
+            "status": "completed",
+            "output": [{
+                "type": "message", "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            }],
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        }
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    response = provider.complete(Request(
+        config.model, "system",
+        [Message("user", [ContentBlock("text", text="hello")])], [],
+    ))
+
+    assert response.content[0].text == "ok"
+    assert captured["payload"]["model"] == "muse-spark-1.2-contributor"
+    assert captured["payload"]["input"] == [{
+        "type": "message", "role": "user",
+        "content": [{"type": "input_text", "text": "hello"}],
+    }]
+    assert "store" not in captured["payload"]
+    assert "include" not in captured["payload"]
+    assert "tools" not in captured["payload"]
+    assert captured["headers"] == {"Authorization": "Bearer meta-placeholder"}
+
+
+def test_meta_provider_allows_preview_endpoint_override(monkeypatch) -> None:
+    monkeypatch.setenv("META_API_KEY", "meta-placeholder")
+    monkeypatch.setenv("META_API_BASE_URL", "https://preview.example.test/openai/v1/")
+
+    provider = create_provider(parse_config({"provider": "meta"}))
+
+    assert isinstance(provider, MetaProvider)
+    assert provider.endpoint == "https://preview.example.test/openai/v1/responses"
 
 
 def test_custom_profile_reports_missing_endpoint_environment_variable(monkeypatch) -> None:

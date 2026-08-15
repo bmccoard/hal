@@ -8,7 +8,7 @@ import signal
 import subprocess
 import threading
 import time
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 
 from .cancellation import CancelledError, CancellationToken, cancellation_or_default
 
@@ -138,6 +138,7 @@ def run_bounded_process(
     *,
     timeout: float | None = None,
     output_limit: int = DEFAULT_OUTPUT_LIMIT,
+    environment: Mapping[str, str] | None = None,
 ) -> ProcessResult:
     """Drain both pipes concurrently while retaining at most a fixed head/tail window."""
     cancellation = cancellation_or_default(cancellation)
@@ -149,6 +150,7 @@ def run_bounded_process(
         kwargs["start_new_session"] = True
     process = subprocess.Popen(
         list(arguments), cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=None if environment is None else dict(environment),
         **kwargs,
     )
     assert process.stdout is not None and process.stderr is not None
