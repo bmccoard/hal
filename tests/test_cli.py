@@ -73,6 +73,8 @@ def test_harness_inspection_resolves_policy_and_budgets_as_json(
     assert payload["budgets"]["tool_calls"] == 4
     assert payload["verification"] == ["tests"]
     assert payload["repair_attempts"] == 1
+    assert payload["max_output_tokens"] == 8192
+    assert payload["max_output_continuations"] == 2
 
 
 def test_repl_workflows_displays_ordered_phases(monkeypatch, tmp_path) -> None:

@@ -106,6 +106,7 @@ class EventKind(str, Enum):
     VERIFICATION_STARTED = "verification_started"
     VERIFICATION_FINISHED = "verification_finished"
     REPAIR_STARTED = "repair_started"
+    OUTPUT_CONTINUATION = "output_continuation"
 
 
 @dataclass(slots=True)
@@ -159,6 +160,8 @@ class Agent:
                  verification_checks: list[VerificationCheck] | None = None,
                  workspace: Path | None = None,
                  repair_attempts: int = 0,
+                 max_output_tokens: int = 8192,
+                 max_output_continuations: int = 2,
                  journal_store: RunJournalStore | None = None,
                  parent_run_id: str = "") -> None:
         self.provider = provider
@@ -178,6 +181,22 @@ class Agent:
         if isinstance(repair_attempts, bool) or not isinstance(repair_attempts, int) or repair_attempts < 0:
             raise ValueError("repair_attempts must be a non-negative integer")
         self.repair_attempts = repair_attempts
+        if (
+            isinstance(max_output_tokens, bool)
+            or not isinstance(max_output_tokens, int)
+            or max_output_tokens <= 0
+        ):
+            raise ValueError("max_output_tokens must be a positive integer")
+        if (
+            isinstance(max_output_continuations, bool)
+            or not isinstance(max_output_continuations, int)
+            or not 0 <= max_output_continuations <= 10
+        ):
+            raise ValueError(
+                "max_output_continuations must be an integer between 0 and 10"
+            )
+        self.max_output_tokens = max_output_tokens
+        self.max_output_continuations = max_output_continuations
         self.journal_store = journal_store
         self.parent_run_id = parent_run_id
         self.journal_errors: list[Exception] = []
@@ -337,6 +356,8 @@ class Agent:
             self.tools, on_event=child_event, budgets=child_budgets,
             workspace=self.workspace, capability=capability,
             journal_store=self.journal_store,
+            max_output_tokens=self.max_output_tokens,
+            max_output_continuations=self.max_output_continuations,
             parent_run_id=parent_run_id,
         )
         try:
@@ -458,6 +479,7 @@ class Agent:
         malformed_counts: dict[str, int] = {}
         tool_signatures: list[tuple[str, str, bool, str]] = []
         no_progress_count = 0
+        output_continuations = 0
         for _ in range(self.max_turns):
             streamed_blocks: list[ContentBlock] = []
 
@@ -531,6 +553,39 @@ class Agent:
                 if assistant_blocks:
                     self.messages.append(Message("assistant", assistant_blocks))
                 if response.stop_reason in {"max_tokens", "length"}:
+                    clean_text = any(
+                        block.type == "text" and bool(block.text.strip())
+                        for block in assistant_blocks
+                    ) and all(
+                        block.type == "text"
+                        or (
+                            block.type == "raw"
+                            and isinstance(block.raw, dict)
+                            and block.raw.get("type") == "reasoning"
+                        )
+                        for block in assistant_blocks
+                    )
+                    if clean_text and output_continuations < self.max_output_continuations:
+                        output_continuations += 1
+                        continuation_prompt = (
+                            "[harness output continuation]\n"
+                            "The provider stopped at its output-token limit. Continue "
+                            "exactly where the previous response stopped. Do not repeat "
+                            "completed text. Complete the original request normally."
+                        )
+                        self.messages.append(Message(
+                            "user", [ContentBlock("text", text=continuation_prompt)],
+                            display_text="[harness output continuation]",
+                        ))
+                        self._emit(Event(
+                            EventKind.OUTPUT_CONTINUATION,
+                            text="continuing a clean text response after token truncation",
+                            args={
+                                "attempt": output_continuations,
+                                "limit": self.max_output_continuations,
+                            },
+                        ))
+                        continue
                     self._fail(MaxOutputTokensError(
                         "provider response was truncated at the token limit", partial
                     ))
@@ -776,6 +831,7 @@ class Agent:
                 self.messages if include_history else self.messages[turn_start:]
             ),
             tools=self.tools.specs_for(allowed_tools, denied_tools),
+            max_tokens=self.max_output_tokens,
         )
 
     def _request_provider(

@@ -171,6 +171,8 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
                       if config.default_capability else None
                   ), verification_checks=config.verification_checks,
                   workspace=root, repair_attempts=config.repair_attempts,
+                  max_output_tokens=config.max_output_tokens,
+                  max_output_continuations=config.max_output_continuations,
                   journal_store=RunJournalStore(SessionStore().directory / "runs"))
     registry.bind_agent(agent)
     return agent, skills, phases
@@ -250,6 +252,8 @@ def run_harness(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
             ),
             "verification": [check.name for check in config.verification_checks],
             "repair_attempts": config.repair_attempts,
+            "max_output_tokens": config.max_output_tokens,
+            "max_output_continuations": config.max_output_continuations,
             "bash_policy": config.bash_policy,
             "only_write_locally": config.only_write_locally,
             "tool_approvals": list(config.tool_approvals),
@@ -266,6 +270,12 @@ def run_harness(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
         print(f"Denied tools: {', '.join(payload['denied_tools']) or 'none'}", file=stdout)
         print(f"Protect existing files: {str(policy.protect_existing_files).lower()}", file=stdout)
         print(f"Budgets: {json.dumps(payload['budgets'], sort_keys=True)}", file=stdout)
+        print(
+            "Provider output: "
+            f"{payload['max_output_tokens']} tokens, "
+            f"{payload['max_output_continuations']} continuation(s)",
+            file=stdout,
+        )
         print(f"Verification: {', '.join(payload['verification']) or 'none'}", file=stdout)
         print(f"Repair attempts: {config.repair_attempts}", file=stdout)
     return 0

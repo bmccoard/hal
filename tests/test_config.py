@@ -51,6 +51,26 @@ def test_streaming_defaults_on_and_can_be_disabled() -> None:
     assert parse_config({"features": {"streaming": False}}).streaming is False
 
 
+def test_output_limits_are_configurable_and_validated() -> None:
+    defaults = parse_config({})
+    assert defaults.max_output_tokens == 8192
+    assert defaults.max_output_continuations == 2
+
+    config = parse_config({
+        "max_output_tokens": 16_384,
+        "max_output_continuations": 3,
+    })
+    assert config.max_output_tokens == 16_384
+    assert config.max_output_continuations == 3
+
+    for value in (0, -1, True, "16384"):
+        with pytest.raises(ValueError, match="max_output_tokens"):
+            parse_config({"max_output_tokens": value})
+    for value in (-1, 11, True, "2"):
+        with pytest.raises(ValueError, match="max_output_continuations"):
+            parse_config({"max_output_continuations": value})
+
+
 def test_harness_budgets_are_opt_in_and_parse_all_limits() -> None:
     assert parse_config({}).harness_budgets is None
     config = parse_config({

@@ -45,6 +45,8 @@ keep machine-specific overrides in ignored `*.local.yaml` files, and commit
 ```yaml
 provider: anthropic
 model: claude-opus-5
+max_output_tokens: 8192
+max_output_continuations: 2
 
 compaction:
   context_window_tokens: 200000
@@ -73,6 +75,8 @@ but changing them does not currently alter runtime behavior.
 | `features.agents_file` | Active | Loads applicable `AGENTS.md` files into the system prompt. |
 | `features.skills` | Active | Discovers skills and expands `$name` and `/name` invocations. |
 | `features.streaming` | Active | Streams interactive responses incrementally when supported; disable it to require buffered responses. |
+| `max_output_tokens` | Active | Sets the maximum output tokens requested on every provider call. |
+| `max_output_continuations` | Active | Automatically resumes clean text-only token truncations up to this limit; `0` disables continuation. |
 | `git.backend` | Active | Selects `auto`, `native`, or `dulwich`; `auto` prefers the Git executable and otherwise uses Dulwich when the optional `git` extra is installed. |
 | `harness.budgets` | Active | Applies per-send provider-call, tool-call, elapsed-time, input-token, and output-token limits in headless and interactive modes. |
 | `harness.default_capability` | Active | Optionally constrains ordinary sends to the built-in `inspect`, `plan`, `change`, or `review` policy. |
@@ -227,6 +231,8 @@ Meta Model API uses a Responses-compatible endpoint:
 ```yaml
 provider: meta
 model: muse-spark-1.2-contributor
+max_output_tokens: 16384
+max_output_continuations: 2
 ```
 
 ```dotenv
@@ -237,6 +243,16 @@ HAL defaults to Meta's endpoint at `https://api.meta.ai/v1/responses`. During th
 public preview its base URL can be overridden
 without putting the endpoint in source-controlled configuration by setting
 `META_API_BASE_URL` in `.env`.
+
+`max_output_tokens` is the per-response request limit, not the total run budget.
+It defaults to `8192`. If Meta or another provider returns a clean text-only
+response with a token-limit stop reason, HAL preserves that text and asks the
+model to continue exactly where it stopped. It makes at most
+`max_output_continuations` additional calls (default `2`), and those calls still
+consume the same harness provider-call, elapsed-time, input-token, and output-token
+budgets. Recognized provider reasoning metadata may accompany the text and is
+preserved opaquely. HAL does not automatically continue empty, unknown structured,
+or malformed truncations because replaying an incomplete structure could be unsafe.
 
 Custom OpenAI-compatible gateways can be defined as named profiles. Keep private
 endpoint URLs and credentials in `.env`; `hal.yaml` contains only their environment

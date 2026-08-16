@@ -4,6 +4,12 @@
 provider: openrouter
 model: openai/gpt-4o-mini
 
+# Maximum output requested from the provider for each response. If a provider
+# still truncates a clean text-only response, HAL can ask it to continue a
+# bounded number of times. Set continuations to 0 to restore fail-fast behavior.
+max_output_tokens: 8192
+max_output_continuations: 2
+
 # Git operations prefer the installed git executable and fall back to the
 # required Dulwich Python backend. Set this to native or dulwich to require
 # one backend explicitly.

@@ -702,12 +702,105 @@ def test_max_tokens_returns_typed_error_with_partial_text() -> None:
     provider = ScriptedProvider([Response([
         ContentBlock("text", text="Truncated answer."),
     ], "max_tokens")])
-    agent = Agent(provider, "model", "system", Registry([]))
+    agent = Agent(
+        provider, "model", "system", Registry([]),
+        max_output_continuations=0,
+    )
 
     with pytest.raises(MaxOutputTokensError) as raised:
         agent.send("start")
 
     assert raised.value.partial_text == "Truncated answer."
+    assert len(provider.requests) == 1
+
+
+def test_clean_text_truncation_continues_within_bound() -> None:
+    provider = ScriptedProvider([
+        Response([
+            ContentBlock("raw", raw={
+                "type": "reasoning", "id": "reason-1", "status": "completed",
+            }),
+            ContentBlock("text", text="First half."),
+        ], "max_tokens"),
+        Response([ContentBlock("text", text="Second half.")], "end_turn"),
+    ])
+    events: list[Event] = []
+    agent = Agent(
+        provider, "model", "system", Registry([]), on_event=events.append,
+        max_output_tokens=16_384, max_output_continuations=2,
+    )
+
+    assert agent.send("start") == "First half.\nSecond half."
+    assert len(provider.requests) == 2
+    assert all(request.max_tokens == 16_384 for request in provider.requests)
+    continuation = provider.requests[1].messages[-1]
+    assert continuation.role == "user"
+    assert continuation.display_text == "[harness output continuation]"
+    assert "Do not repeat" in continuation.content[0].text
+    continuation_events = [
+        event for event in events if event.kind == EventKind.OUTPUT_CONTINUATION
+    ]
+    assert [event.args for event in continuation_events] == [
+        {"attempt": 1, "limit": 2},
+    ]
+
+
+def test_clean_text_truncation_stops_after_continuation_limit() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock("text", text=f"Part {number}.")], "length")
+        for number in range(1, 4)
+    ])
+    agent = Agent(
+        provider, "model", "system", Registry([]),
+        max_output_continuations=2,
+    )
+
+    with pytest.raises(MaxOutputTokensError) as raised:
+        agent.send("start")
+
+    assert raised.value.partial_text == "Part 1.\nPart 2.\nPart 3."
+    assert len(provider.requests) == 3
+
+
+def test_output_continuation_obeys_provider_call_budget() -> None:
+    provider = ScriptedProvider([
+        Response([ContentBlock("text", text="First half.")], "max_tokens"),
+    ])
+    agent = Agent(
+        provider, "model", "system", Registry([]),
+        budgets=RunBudgets(
+            provider_calls=1, tool_calls=None, elapsed_seconds=None,
+        ),
+        max_output_continuations=2,
+    )
+
+    with pytest.raises(BudgetExhaustedError) as raised:
+        agent.send("start")
+
+    assert raised.value.reason_code == "budget_provider_calls_exhausted"
+    assert raised.value.partial_text == "First half."
+    assert len(provider.requests) == 1
+
+
+@pytest.mark.parametrize("content", [
+    [],
+    [ContentBlock("text", text="   ")],
+    [ContentBlock("commentary", text="unfinished reasoning")],
+    [
+        ContentBlock("text", text="Partial answer."),
+        ContentBlock("raw", raw={"type": "unknown_structure"}),
+    ],
+])
+def test_non_clean_truncation_is_not_automatically_continued(content) -> None:
+    provider = ScriptedProvider([Response(content, "max_tokens")])
+    agent = Agent(
+        provider, "model", "system", Registry([]),
+        max_output_continuations=2,
+    )
+
+    with pytest.raises(MaxOutputTokensError):
+        agent.send("start")
+
     assert len(provider.requests) == 1
 
 
