@@ -4,21 +4,25 @@ from __future__ import annotations
 import json
 import os
 import re
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 import shutil
 import time
+import threading
 from types import MappingProxyType
 from typing import Any, Callable, Iterator, Mapping
 
 from .agent import Agent
 from .cancellation import CancelledError, CancellationToken, cancellation_or_default
-from .harness import Capability, RunBudgets, RunStatus, resolve_capability
+from .harness import (
+    Capability, RunBudgets, RunStatus, compose_run_budgets, resolve_capability,
+)
 from .git import create_git_backend, normalize_paths
 from .process import ProcessTimeout, run_bounded_process
 from .tools import bound_output, shell_argv
 from .workflow_budgets import (
-    WorkflowBudgetLedger, WorkflowBudgets, WorkflowUsage, remaining_harness_budgets,
+    WorkflowBudgetExhaustedError, WorkflowBudgetLedger, WorkflowBudgetReason,
+    WorkflowBudgets, WorkflowUsage, remaining_harness_budgets,
 )
 from .workflow_artifacts import WorkflowArtifactHandle, WorkflowArtifactStore
 from .workflow_expressions import render_workflow_template
@@ -69,6 +73,9 @@ class WorkflowNodeDispatcher:
         self.external_intent = external_intent
         self.publication_adapters = publication_adapters
         self._workflow_stack: list[str] = []
+        self._ledger_lock = threading.RLock()
+        self._agent_lock = threading.Lock()
+        self._elapsed_budget_lock = threading.Lock()
 
     def execute(
         self, definition: WorkflowDefinition, inputs: Mapping[str, Any],
@@ -82,6 +89,30 @@ class WorkflowNodeDispatcher:
             return execute_serial_workflow(definition, inputs, self)
         finally:
             self._workflow_stack.pop()
+
+    def wait_for_retry(self, seconds: float) -> None:
+        """Wait cooperatively while charging retry backoff to aggregate elapsed time."""
+        with self._elapsed_budget_lock:
+            self.cancellation.raise_if_cancelled()
+            with self._ledger_lock:
+                remaining = self.ledger.remaining().elapsed_seconds
+            if remaining is not None and remaining <= 0:
+                raise WorkflowBudgetExhaustedError(WorkflowBudgetReason.ELAPSED_SECONDS)
+            wait_seconds = seconds if remaining is None else min(seconds, remaining)
+            started = time.monotonic()
+            error: BaseException | None = None
+            try:
+                self.cancellation.wait(wait_seconds)
+            except BaseException as exc:
+                error = exc
+            elapsed = max(0.0, time.monotonic() - started)
+            charged = elapsed if remaining is None else min(elapsed, remaining)
+            with self._ledger_lock:
+                self.ledger = self.ledger.consume(WorkflowUsage(elapsed_seconds=charged))
+            if error is not None:
+                raise error
+            if remaining is not None and wait_seconds < seconds:
+                raise WorkflowBudgetExhaustedError(WorkflowBudgetReason.ELAPSED_SECONDS)
 
     @contextmanager
     def workflow_scope(self, definition: WorkflowDefinition) -> Iterator[None]:
@@ -98,35 +129,62 @@ class WorkflowNodeDispatcher:
     def __call__(self, invocation: WorkflowNodeInvocation) -> WorkflowNodeReceipt:
         self.cancellation.raise_if_cancelled()
         validate_node_inputs(invocation)
-        self.ledger = self.ledger.consume(WorkflowUsage(node_attempts=1))
+        workspace = (invocation.workspace or self.workspace).resolve()
+        with self._ledger_lock:
+            self.ledger = self.ledger.consume(WorkflowUsage(node_attempts=1))
         if invocation.node.type == "command":
-            remaining = self.ledger.remaining().elapsed_seconds
-            started = time.monotonic()
-            receipt = execute_command_node(
-                invocation, self.workspace, self.cancellation,
-                timeout_limit=remaining,
-            )
-            self.ledger = self.ledger.consume(WorkflowUsage(
-                elapsed_seconds=time.monotonic() - started,
-            ))
+            with self._ledger_lock:
+                remaining = self.ledger.remaining().elapsed_seconds
+            budget_guard = self._elapsed_budget_lock if remaining is not None else nullcontext()
+            with budget_guard:
+                with self._ledger_lock:
+                    remaining = self.ledger.remaining().elapsed_seconds
+                started = time.monotonic()
+                receipt = execute_command_node(
+                    invocation, workspace, self.cancellation,
+                    timeout_limit=remaining,
+                )
+                with self._ledger_lock:
+                    self.ledger = self.ledger.consume(WorkflowUsage(
+                        elapsed_seconds=time.monotonic() - started,
+                    ))
             return validate_and_store_node_outputs(invocation, receipt, self.artifact_store)
         if invocation.node.type == "agent":
             if self.agent is None:
                 raise RuntimeError("agent node requires an agent dispatcher")
-            receipt, usage = execute_agent_node(
-                invocation, self.agent, self.ledger, self.cancellation,
-                self.capabilities,
-            )
-            self.ledger = self.ledger.consume(usage)
+            if workspace != self.workspace:
+                raise ValueError(
+                    "agent node workspace claim requires a workspace-specific agent dispatcher"
+                )
+            with self._agent_lock:
+                with self._ledger_lock:
+                    remaining_elapsed = self.ledger.remaining().elapsed_seconds
+                budget_guard = (
+                    self._elapsed_budget_lock
+                    if remaining_elapsed is not None else nullcontext()
+                )
+                with budget_guard:
+                    with self._ledger_lock:
+                        ledger = self.ledger
+                    receipt, usage = execute_agent_node(
+                        invocation, self.agent, ledger, self.cancellation,
+                        self.capabilities,
+                    )
+                    with self._ledger_lock:
+                        self.ledger = self.ledger.consume(usage)
             return validate_and_store_node_outputs(invocation, receipt, self.artifact_store)
         if invocation.node.type == "workflow":
+            if workspace != self.workspace:
+                raise ValueError(
+                    "nested workflow workspace claim requires a workspace-specific dispatcher"
+                )
             receipt = self._execute_nested_workflow(invocation)
             return validate_and_store_node_outputs(invocation, receipt, self.artifact_store)
         if invocation.node.type == "approval":
             return execute_approval_node(invocation)
         if invocation.node.type == "git":
             receipt = execute_git_node(
-                invocation, self.workspace, self.cancellation,
+                invocation, workspace, self.cancellation,
                 backend_preference=self.git_backend,
             )
             return validate_and_store_node_outputs(invocation, receipt, self.artifact_store)
@@ -139,7 +197,7 @@ class WorkflowNodeDispatcher:
                     else self.pull_request_adapter
                 )
                 receipt = execute_pull_request_node(
-                    invocation, self.workspace, adapter,
+                    invocation, workspace, adapter,
                     self.artifact_store, self.cancellation,
                     git_backend=self.git_backend,
                     record_external_intent=self.external_intent,
@@ -151,7 +209,7 @@ class WorkflowNodeDispatcher:
                     else self.push_adapter
                 )
                 receipt = execute_push_node(
-                    invocation, self.workspace, adapter, self.cancellation,
+                    invocation, workspace, adapter, self.cancellation,
                     git_backend=self.git_backend,
                     record_external_intent=self.external_intent,
                 )
@@ -215,6 +273,10 @@ def execute_agent_node(
     )
     raw_node_budgets = node.config.get("budgets", {})
     node_budgets = RunBudgets(**dict(raw_node_budgets)) if raw_node_budgets else None
+    if invocation.timeout_seconds is not None:
+        node_budgets = compose_run_budgets(
+            node_budgets, RunBudgets(elapsed_seconds=invocation.timeout_seconds),
+        )
     budgets = remaining_harness_budgets(ledger.budgets, ledger.usage, node_budgets)
     rendered = render_workflow_template(str(node.config["prompt"]), invocation.context)
     prompt = str(rendered)

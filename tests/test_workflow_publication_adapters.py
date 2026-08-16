@@ -11,6 +11,7 @@ from hal.workflow_publication_adapters import (
     GitHubPullRequest, GitHubPullRequestAdapter, GitHubRepository,
     GitHubRESTAPI, PublicationAdapterRegistry,
 )
+from hal.workflow_runtime import WorkflowTransientError
 
 
 COMMIT = "1" * 40
@@ -157,3 +158,27 @@ def test_github_http_error_redacts_credential(monkeypatch) -> None:
         )
     assert "secret-token" not in str(raised.value)
     assert "[redacted]" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("status", "error_class"),
+    [(429, "rate_limit"), (503, "service_unavailable")],
+)
+def test_github_transient_http_errors_are_typed(
+    monkeypatch, status: int, error_class: str,
+) -> None:
+    def urlopen(*_args, **_kwargs):
+        raise __import__("urllib.error").error.HTTPError(
+            "https://api.github.com", status, "temporary", {},
+            io.BytesIO(b"temporary"),
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", urlopen)
+    api = GitHubRESTAPI("secret-token")
+
+    with pytest.raises(WorkflowTransientError) as raised:
+        api.list_pull_requests(
+            GitHubRepository("acme", "repo"), head="feature", base="main",
+        )
+
+    assert raised.value.error_class == error_class

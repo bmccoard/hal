@@ -23,12 +23,19 @@ from .workflow_budgets import WorkflowBudgets, compose_workflow_budgets
 
 WORKFLOW_SCHEMA_VERSION = 1
 WORKFLOW_DIRECTORY = Path(".hal") / "workflows"
+MAX_WORKFLOW_SOURCE_BYTES = 1024 * 1024
+MAX_WORKFLOW_NODES = 1024
+MAX_WORKFLOW_PARALLELISM = 4
 _IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 _VALUE_TYPES = frozenset({
     "string", "boolean", "integer", "json", "markdown", "path", "diff",
     "check_result",
 })
 _DEPENDENCY_POLICIES = frozenset({"all_succeeded", "all_terminal"})
+TRANSIENT_ERROR_CLASSES = frozenset({
+    "network", "rate_limit", "service_unavailable", "temporary_io",
+    "timeout", "worker_lost",
+})
 _WORKSPACE_POLICIES = frozenset({"current", "worktree"})
 _BUDGET_FIELDS = frozenset({
     "node_attempts", "provider_calls", "tool_calls", "elapsed_seconds",
@@ -146,6 +153,7 @@ NODE_STATUS_TRANSITIONS: Mapping[WorkflowNodeStatus, frozenset[WorkflowNodeStatu
         WorkflowNodeStatus.BUDGET_EXHAUSTED,
     }),
     WorkflowNodeStatus.RUNNING: frozenset({
+        WorkflowNodeStatus.READY,
         WorkflowNodeStatus.WAITING, WorkflowNodeStatus.SUCCEEDED, WorkflowNodeStatus.FAILED,
         WorkflowNodeStatus.DENIED, WorkflowNodeStatus.CANCELLED, WorkflowNodeStatus.TIMED_OUT,
         WorkflowNodeStatus.BUDGET_EXHAUSTED, WorkflowNodeStatus.INTERRUPTED,
@@ -250,7 +258,7 @@ class NodeTypeRegistry:
 
 _BASE_NODE_FIELDS = frozenset({
     "id", "type", "depends_on", "dependency_policy", "condition", "inputs",
-    "outputs",
+    "outputs", "retry",
 })
 BUILTIN_NODE_TYPES = NodeTypeRegistry([
     NodeTypeSpec(
@@ -452,7 +460,12 @@ def load_workflow(
         raise ValueError(f"workflow path must be inside {directory}") from exc
     if path.parent != directory or path.suffix != ".yaml":
         raise ValueError(f"workflow path must be a .yaml file directly inside {directory}")
-    raw = path.read_bytes()
+    with path.open("rb") as handle:
+        raw = handle.read(MAX_WORKFLOW_SOURCE_BYTES + 1)
+    if len(raw) > MAX_WORKFLOW_SOURCE_BYTES:
+        raise ValueError(
+            f"{relative}: workflow exceeds {MAX_WORKFLOW_SOURCE_BYTES} bytes"
+        )
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -490,6 +503,8 @@ def parse_workflow_definition(
     raw_nodes = root.get("nodes")
     if not isinstance(raw_nodes, list) or not raw_nodes:
         raise ValueError("workflow.nodes must be a non-empty list")
+    if len(raw_nodes) > MAX_WORKFLOW_NODES:
+        raise ValueError(f"workflow.nodes may contain at most {MAX_WORKFLOW_NODES} nodes")
     nodes = tuple(_parse_node(value, index, registry) for index, value in enumerate(raw_nodes))
     _validate_graph(nodes, inputs)
     if any(node.type == "publish" for node in nodes) and execution.workspace != "worktree":
@@ -530,8 +545,14 @@ def _parse_execution(value: Any) -> WorkflowExecution:
     if workspace not in _WORKSPACE_POLICIES:
         raise ValueError("workflow.execution.workspace must be 'current' or 'worktree'")
     max_parallel = raw.get("max_parallel", 1)
-    if isinstance(max_parallel, bool) or not isinstance(max_parallel, int) or max_parallel <= 0:
-        raise ValueError("workflow.execution.max_parallel must be a positive integer")
+    if (
+        isinstance(max_parallel, bool) or not isinstance(max_parallel, int)
+        or max_parallel <= 0 or max_parallel > MAX_WORKFLOW_PARALLELISM
+    ):
+        raise ValueError(
+            "workflow.execution.max_parallel must be an integer between 1 and "
+            f"{MAX_WORKFLOW_PARALLELISM}"
+        )
     timeout = raw.get("timeout_seconds")
     if timeout is not None and (
         isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0
@@ -596,6 +617,8 @@ def _parse_node(value: Any, index: int, registry: NodeTypeRegistry) -> WorkflowN
                 f"{path}.outputs.{output_name}.source must be one of: {available}"
             )
     config = {name: _freeze(raw[name]) for name in spec.fields if name in raw}
+    if "retry" in raw:
+        config["retry"] = _freeze(raw["retry"])
     if node_type == "command":
         # Command execution is bounded and hermetic by default. Environment
         # inheritance must always be explicitly allow-listed by the workflow.
@@ -605,6 +628,8 @@ def _parse_node(value: Any, index: int, registry: NodeTypeRegistry) -> WorkflowN
         config.setdefault("inherit_environment", ())
         config.setdefault("max_output_chars", 100_000)
     _validate_builtin_node_config(node_type, config, path)
+    if "retry" in config:
+        _validate_retry_policy(config["retry"], spec, f"{path}.retry")
     _validate_templates_in_value(
         {name: item.value for name, item in inputs.items()}, f"{path}.inputs",
     )
@@ -631,6 +656,46 @@ def _parse_outputs(value: Any, path: str) -> dict[str, WorkflowOutputDefinition]
             type_name, _required_string(spec, "source", item_path),
         )
     return outputs
+
+
+def _validate_retry_policy(value: Any, node_type: NodeTypeSpec, path: str) -> None:
+    raw = _mapping(value, path)
+    _unknown(raw, {
+        "max_attempts", "error_classes", "initial_backoff_seconds",
+        "multiplier", "max_backoff_seconds",
+    }, path)
+    if not node_type.idempotent:
+        raise ValueError(
+            f"{path} is allowed only for an idempotent registered node type"
+        )
+    maximum = raw.get("max_attempts")
+    if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 2:
+        raise ValueError(f"{path}.max_attempts must be an integer of at least 2")
+    classes = raw.get("error_classes")
+    if (
+        not isinstance(classes, (list, tuple)) or not classes
+        or any(not isinstance(item, str) or item not in TRANSIENT_ERROR_CLASSES for item in classes)
+    ):
+        allowed = ", ".join(sorted(TRANSIENT_ERROR_CLASSES))
+        raise ValueError(f"{path}.error_classes must be a non-empty list drawn from: {allowed}")
+    if len(set(classes)) != len(classes):
+        raise ValueError(f"{path}.error_classes must not contain duplicates")
+    initial = raw.get("initial_backoff_seconds", 0.5)
+    multiplier = raw.get("multiplier", 2.0)
+    cap = raw.get("max_backoff_seconds", 30.0)
+    for name, number in (
+        ("initial_backoff_seconds", initial),
+        ("multiplier", multiplier),
+        ("max_backoff_seconds", cap),
+    ):
+        if isinstance(number, bool) or not isinstance(number, (int, float)) or number <= 0:
+            raise ValueError(f"{path}.{name} must be a positive number")
+    if multiplier < 1:
+        raise ValueError(f"{path}.multiplier must be at least 1")
+    if cap < initial:
+        raise ValueError(
+            f"{path}.max_backoff_seconds must be at least initial_backoff_seconds"
+        )
 
 
 def _parse_node_inputs(value: Any, path: str) -> dict[str, WorkflowNodeInputDefinition]:

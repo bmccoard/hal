@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from hashlib import sha256
 import json
 import os
@@ -15,10 +15,11 @@ from typing import Any, Callable, Mapping
 from .workflow_artifacts import WorkflowArtifactHandle
 from .workflow_budgets import WorkflowBudgets, WorkflowUsage
 from .workflow_runtime import (
-    NodeExecutor, WorkflowNodeRecord, WorkflowRunRecord, execute_serial_workflow,
-    materialize_workflow_inputs,
+    NodeExecutor, WorkflowNodeRecord, WorkflowRunRecord,
+    execute_concurrent_workflow, execute_serial_workflow, materialize_workflow_inputs,
 )
 from .workflow_schema import WorkflowDefinition, WorkflowNodeStatus
+from .workflow_worktrees import ValidatedWorkflowWorkspace
 
 
 WORKFLOW_RUN_RECORD_VERSION = 1
@@ -91,6 +92,7 @@ class WorkflowRunStore:
                 "branch": branch,
                 "head": head,
             },
+            "workspace_claims": {},
             "nodes": {
                 node.id: {"status": "pending", "attempts": [], "outcome": None}
                 for node in definition.nodes
@@ -177,6 +179,34 @@ class WorkflowRunState:
     def run_id(self) -> str:
         return str(self.payload["run_id"])
 
+    def bind_workspace_claims(
+        self, claims: Mapping[str, ValidatedWorkflowWorkspace],
+    ) -> None:
+        """Pin host-validated node workspaces before scheduling mutations."""
+        unknown = set(claims) - set(self.payload["nodes"])
+        if unknown:
+            raise ValueError(
+                f"workspace claims contain unknown node(s): {', '.join(sorted(unknown))}"
+            )
+        if any(not isinstance(claim, ValidatedWorkflowWorkspace) for claim in claims.values()):
+            raise TypeError("workspace claims must be host-validated workspace objects")
+        encoded = {
+            node_id: {
+                "path": str(claim.path),
+                "repository": str(claim.repository),
+                "branch": claim.branch,
+            }
+            for node_id, claim in claims.items()
+        }
+        stored = self.payload.get("workspace_claims", {})
+        if stored and stored != encoded:
+            raise ValueError("workflow workspace claims changed since execution began")
+        if not stored and encoded:
+            if any(node.get("attempts") for node in self.payload["nodes"].values()):
+                raise ValueError("workspace claims cannot be added after execution began")
+            self.payload["workspace_claims"] = encoded
+            self._persist("workspace_claims_bound", nodes=sorted(encoded))
+
     def transition(
         self, node_id: str, current: WorkflowNodeStatus, target: WorkflowNodeStatus,
     ) -> None:
@@ -191,6 +221,7 @@ class WorkflowRunState:
             return
         node["status"] = target.value
         if target is WorkflowNodeStatus.RUNNING:
+            node.pop("retry_not_before", None)
             attempt = {
                 "id": f"attempt_{len(node['attempts']) + 1}",
                 "status": "running",
@@ -200,6 +231,8 @@ class WorkflowRunState:
                 "reason": None,
                 "external_intent": None,
                 "external_receipt": None,
+                "error_class": None,
+                "retry_delay_seconds": 0.0,
             }
             node["attempts"].append(attempt)
             self.payload["status"] = "running"
@@ -234,16 +267,82 @@ class WorkflowRunState:
             })
             self.payload["approvals"].append(review)
             node["approval_token"] = token
-        if node["attempts"]:
+        if node["attempts"] and record.record_attempt:
             attempt = node["attempts"][-1]
             attempt.update({
-                "status": record.status.value,
+                "status": (record.attempt_status or record.status).value,
                 "receipt_at": _now(),
-                "outcome": record.outcome,
-                "reason": record.reason,
+                "outcome": (
+                    record.attempt_outcome
+                    if record.attempt_status is not None else record.outcome
+                ),
+                "reason": (
+                    record.attempt_reason
+                    if record.attempt_status is not None else record.reason
+                ),
+                "elapsed_seconds": record.attempt_elapsed_seconds,
+                "error_class": record.error_class,
+                "retry_delay_seconds": record.retry_delay_seconds,
             })
             if record.external_receipt is not None:
                 attempt["external_receipt"] = _json_safe(record.external_receipt)
+        node.pop("retry_not_before", None)
+        self._store_outputs(node_id, record)
+        self._persist(
+            (
+                "approval_waiting" if record.status is WorkflowNodeStatus.WAITING
+                else "attempt_receipt" if record.record_attempt else "node_terminal"
+            ),
+            node_id=node_id, status=record.status.value,
+        )
+
+    def continue_loop(self, node_id: str, record: WorkflowNodeRecord) -> None:
+        """Atomically checkpoint a completed attempt and make its node ready again."""
+        node = self.payload["nodes"][node_id]
+        if node.get("status") != WorkflowNodeStatus.RUNNING.value or not node.get("attempts"):
+            raise ValueError(f"loop continuation requires running node {node_id!r}")
+        attempt = node["attempts"][-1]
+        if attempt.get("status") != "running" or attempt.get("receipt_at") is not None:
+            raise ValueError(f"loop continuation requires an active attempt for {node_id!r}")
+        attempt.update({
+            "status": (record.attempt_status or record.status).value,
+            "receipt_at": _now(),
+            "outcome": record.outcome,
+            "reason": record.reason,
+            "elapsed_seconds": record.attempt_elapsed_seconds,
+            "error_class": record.error_class,
+            "retry_delay_seconds": record.retry_delay_seconds,
+        })
+        if record.external_receipt is not None:
+            attempt["external_receipt"] = _json_safe(record.external_receipt)
+        self._store_outputs(node_id, record)
+        node["status"] = WorkflowNodeStatus.READY.value
+        node["outcome"] = None
+        if record.error_class is not None:
+            node["reason"] = f"transient {record.error_class} failure; retry scheduled"
+            node["retry_not_before"] = (
+                datetime.now(timezone.utc) + timedelta(seconds=record.retry_delay_seconds)
+            ).isoformat().replace("+00:00", "Z")
+            event = "retry_scheduled"
+        else:
+            node["reason"] = "loop condition not yet satisfied"
+            node.pop("retry_not_before", None)
+            event = "loop_attempt_receipt"
+        self._persist(
+            event, node_id=node_id, attempt_id=attempt["id"],
+            status=attempt["status"], next_status=WorkflowNodeStatus.READY.value,
+            **(
+                {
+                    "error_class": record.error_class,
+                    "retry_delay_seconds": record.retry_delay_seconds,
+                    "retry_not_before": node["retry_not_before"],
+                }
+                if record.error_class is not None else {}
+            ),
+        )
+
+    def _store_outputs(self, node_id: str, record: WorkflowNodeRecord) -> None:
+        node = self.payload["nodes"][node_id]
         artifact_ids = []
         for name, value in record.outputs.items():
             if isinstance(value, WorkflowArtifactHandle):
@@ -266,10 +365,6 @@ class WorkflowRunState:
             )
             for name, value in record.outputs.items()
         }
-        self._persist(
-            "approval_waiting" if record.status is WorkflowNodeStatus.WAITING else "attempt_receipt",
-            node_id=node_id, status=record.status.value,
-        )
 
     def record_external_intent(self, node_id: str, intent: Mapping[str, Any]) -> None:
         """Durably journal a sanitized idempotent effect before adapter invocation."""
@@ -335,6 +430,8 @@ class WorkflowRunState:
         node["status"] = target.value
         node["outcome"] = None
         node["reason"] = reason
+        node.pop("retry_not_before", None)
+        node["retry_reset_at"] = len(node.get("attempts", []))
         if node["attempts"] and node["attempts"][-1]["status"] == "running":
             node["attempts"][-1]["status"] = "interrupted"
             node["attempts"][-1]["reason"] = reason
@@ -456,10 +553,59 @@ def execute_persisted_workflow(
             state.update_workspace_checkpoint(**workspace_snapshot())
         state.receipt(node_id, record)
 
+    def loop_continue(node_id, record):
+        state.update_usage(usage())
+        if workspace_snapshot is not None:
+            state.update_workspace_checkpoint(**workspace_snapshot())
+        state.continue_loop(node_id, record)
+
     result = execute_serial_workflow(
         definition, inputs, executor,
         on_transition=transition,
         on_receipt=receipt,
+        on_loop_continue=loop_continue,
+    )
+    if workspace_snapshot is not None:
+        state.update_workspace_checkpoint(**workspace_snapshot())
+    state.finish(result, usage())
+    return result
+
+
+def execute_persisted_concurrent_workflow(
+    definition: WorkflowDefinition,
+    inputs: Mapping[str, Any],
+    executor: NodeExecutor,
+    state: WorkflowRunState,
+    usage: Callable[[], WorkflowUsage] = WorkflowUsage,
+    workspace_snapshot: Callable[[], Mapping[str, Any]] | None = None,
+    *,
+    max_parallel: int | None = None,
+    workspace_claims: Mapping[str, ValidatedWorkflowWorkspace] | None = None,
+) -> WorkflowRunRecord:
+    """Run a bounded concurrent DAG with atomic intents and ordered durable events."""
+    if workspace_claims:
+        state.bind_workspace_claims(workspace_claims)
+    def transition(node_id, current, target):
+        state.update_usage(usage())
+        state.transition(node_id, current, target)
+
+    def receipt(node_id, record):
+        state.update_usage(usage())
+        if workspace_snapshot is not None:
+            state.update_workspace_checkpoint(**workspace_snapshot())
+        state.receipt(node_id, record)
+
+    def attempt_continue(node_id, record):
+        state.update_usage(usage())
+        if workspace_snapshot is not None:
+            state.update_workspace_checkpoint(**workspace_snapshot())
+        state.continue_loop(node_id, record)
+
+    result = execute_concurrent_workflow(
+        definition, inputs, executor, max_parallel=max_parallel,
+        on_transition=transition, on_receipt=receipt,
+        on_loop_continue=attempt_continue,
+        workspace_claims=workspace_claims,
     )
     if workspace_snapshot is not None:
         state.update_workspace_checkpoint(**workspace_snapshot())

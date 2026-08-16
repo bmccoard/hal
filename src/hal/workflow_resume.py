@@ -10,13 +10,16 @@ from typing import Any, Callable, Mapping
 from .workflow_artifacts import WorkflowArtifact, WorkflowArtifactHandle, WorkflowArtifactStore
 from .workflow_budgets import WorkflowUsage
 from .workflow_runtime import (
-    NodeExecutor, WorkflowNodeRecord, WorkflowRunRecord, execute_serial_workflow,
+    NodeExecutor, WorkflowNodeRecord, WorkflowRunRecord,
+    execute_concurrent_workflow, execute_serial_workflow,
 )
 from .workflow_schema import (
-    NODE_TERMINAL_STATUSES, WorkflowDefinition, WorkflowNodeStatus,
+    NODE_TERMINAL_STATUSES, TRANSIENT_ERROR_CLASSES, WorkflowAttemptStatus,
+    WorkflowDefinition, WorkflowNodeStatus,
 )
 from .workflow_policy import workflow_required_effects, workflow_requires_trust
 from .workflow_state import WorkflowRunState
+from .workflow_worktrees import ValidatedWorkflowWorkspace
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +37,7 @@ def audit_workflow_resume(
     repository: Path | None = None,
     workspace: Path | None = None,
     current_head: str | None = None,
+    workspace_claims: Mapping[str, ValidatedWorkflowWorkspace] | None = None,
 ) -> WorkflowResumeAudit:
     """Validate every pinned identity and durable object before recovery is offered."""
     payload = state.payload
@@ -63,6 +67,7 @@ def audit_workflow_resume(
         raise ValueError("workflow workspace is missing")
     if current_head is not None and stored_workspace.get("head") not in {None, current_head}:
         raise ValueError("workflow workspace HEAD changed")
+    _audit_workspace_claims(payload.get("workspace_claims", {}), workspace_claims)
     _audit_budgets(payload)
     _audit_lease(payload.get("lease"))
     _audit_artifacts(payload.get("artifacts"), artifact_store)
@@ -81,9 +86,37 @@ def audit_workflow_resume(
         attempts = node.get("attempts")
         if not isinstance(attempts, list):
             raise ValueError(f"node {node_id!r} attempts must be a list")
-        for attempt in attempts:
+        for index, attempt in enumerate(attempts, 1):
             if not isinstance(attempt, dict):
                 raise ValueError(f"node {node_id!r} has malformed attempt state")
+            if attempt.get("id") != f"attempt_{index}":
+                raise ValueError(f"node {node_id!r} has invalid or non-sequential attempt ID")
+            try:
+                attempt_status = WorkflowAttemptStatus(str(attempt.get("status")))
+            except ValueError as exc:
+                raise ValueError(f"node {node_id!r} has unknown attempt status") from exc
+            elapsed = attempt.get("elapsed_seconds", 0.0)
+            if (
+                isinstance(elapsed, bool)
+                or not isinstance(elapsed, (int, float))
+                or elapsed < 0
+            ):
+                raise ValueError(f"node {node_id!r} has invalid attempt elapsed time")
+            error_class = attempt.get("error_class")
+            if error_class is not None and error_class not in TRANSIENT_ERROR_CLASSES:
+                raise ValueError(f"node {node_id!r} has unknown transient error class")
+            retry_delay = attempt.get("retry_delay_seconds", 0.0)
+            if (
+                isinstance(retry_delay, bool)
+                or not isinstance(retry_delay, (int, float))
+                or retry_delay < 0
+            ):
+                raise ValueError(f"node {node_id!r} has invalid retry delay")
+            if attempt_status is WorkflowAttemptStatus.RUNNING:
+                if attempt.get("receipt_at") is not None:
+                    raise ValueError(f"node {node_id!r} has a running attempt with a receipt")
+            elif attempt.get("receipt_at") is None:
+                raise ValueError(f"terminal node {node_id!r} is missing its completion receipt")
             external = attempt.get("external_receipt")
             intent = attempt.get("external_intent")
             if intent is not None:
@@ -105,6 +138,8 @@ def audit_workflow_resume(
             if not attempts or attempts[-1].get("status") != "running" or attempts[-1].get("receipt_at") is not None:
                 raise ValueError(f"node {node_id!r} has inconsistent in-flight receipt state")
             indeterminate.append(node_id)
+        elif status is WorkflowNodeStatus.READY and node.get("retry_not_before") is not None:
+            _retry_delay_remaining(node["retry_not_before"])
         elif status in NODE_TERMINAL_STATUSES:
             if status not in {WorkflowNodeStatus.SKIPPED, WorkflowNodeStatus.CANCELLED} and (
                 not attempts or attempts[-1].get("receipt_at") is None
@@ -123,9 +158,13 @@ def resume_persisted_workflow(
     retry_nodes: frozenset[str] = frozenset(),
     usage: Callable[[], WorkflowUsage] = WorkflowUsage,
     workspace_snapshot: Callable[[], Mapping[str, Any]] | None = None,
+    max_parallel: int | None = None,
+    workspace_claims: Mapping[str, ValidatedWorkflowWorkspace] | None = None,
 ) -> WorkflowRunRecord:
     """Resume audited state without rerunning successful nodes."""
-    audit = audit_workflow_resume(state, definition, artifact_store)
+    audit = audit_workflow_resume(
+        state, definition, artifact_store, workspace_claims=workspace_claims,
+    )
     by_id = {node.id: node for node in definition.nodes}
     unknown_retry = set(retry_nodes) - set(by_id)
     if unknown_retry:
@@ -168,15 +207,80 @@ def resume_persisted_workflow(
             state.update_workspace_checkpoint(**workspace_snapshot())
         state.receipt(node_id, record)
 
-    result = execute_serial_workflow(
-        definition, state.payload["inputs"], executor,
-        on_transition=transition, on_receipt=receipt,
-        initial_records=initial,
+    def loop_continue(node_id, record):
+        state.update_usage(usage())
+        if workspace_snapshot is not None:
+            state.update_workspace_checkpoint(**workspace_snapshot())
+        state.continue_loop(node_id, record)
+
+    initial_states = {
+        node_id: WorkflowNodeStatus(raw["status"])
+        for node_id, raw in state.payload["nodes"].items()
+        if WorkflowNodeStatus(raw["status"]) not in NODE_TERMINAL_STATUSES
+        and WorkflowNodeStatus(raw["status"]) is not WorkflowNodeStatus.WAITING
+    }
+    attempt_counts = {
+        node_id: len(raw.get("attempts", []))
+        for node_id, raw in state.payload["nodes"].items()
+    }
+    loop_elapsed = {
+        node_id: sum(
+            float(attempt.get("elapsed_seconds", 0.0))
+            for attempt in raw.get("attempts", [])
+        )
+        for node_id, raw in state.payload["nodes"].items()
+    }
+    retry_counts = {
+        node_id: _consecutive_retry_count(raw)
+        for node_id, raw in state.payload["nodes"].items()
+    }
+    retry_delays = {
+        node_id: _retry_delay_remaining(raw["retry_not_before"])
+        for node_id, raw in state.payload["nodes"].items()
+        if raw.get("retry_not_before") is not None
+    }
+
+    scheduler = (
+        execute_concurrent_workflow
+        if workspace_claims or (max_parallel is not None and max_parallel > 1)
+        else execute_serial_workflow
+    )
+    scheduler_options = {
+        "on_transition": transition, "on_receipt": receipt,
+        "initial_records": initial, "on_loop_continue": loop_continue,
+        "initial_states": initial_states,
+        "initial_attempt_counts": attempt_counts,
+        "initial_loop_elapsed": loop_elapsed,
+        "initial_retry_counts": retry_counts,
+        "initial_retry_delays": retry_delays,
+    }
+    if scheduler is execute_concurrent_workflow:
+        scheduler_options["max_parallel"] = max_parallel
+        scheduler_options["workspace_claims"] = workspace_claims
+    result = scheduler(
+        definition, state.payload["inputs"], executor, **scheduler_options,
     )
     if workspace_snapshot is not None:
         state.update_workspace_checkpoint(**workspace_snapshot())
     state.finish(result, usage())
     return result
+
+
+def _audit_workspace_claims(
+    stored: Any,
+    claims: Mapping[str, ValidatedWorkflowWorkspace] | None,
+) -> None:
+    pinned = _mapping(stored, "workspace claims")
+    supplied = {
+        node_id: {
+            "path": str(claim.path),
+            "repository": str(claim.repository),
+            "branch": claim.branch,
+        }
+        for node_id, claim in (claims or {}).items()
+    }
+    if pinned != supplied:
+        raise ValueError("validated workflow workspace claims are missing or changed")
 
 
 def _restore_terminal_records(
@@ -219,6 +323,29 @@ def _audit_budgets(payload: dict[str, Any]) -> None:
         limit = budgets.get(name)
         if limit is not None and used > limit:
             raise ValueError(f"workflow usage exceeds persisted {name} budget")
+
+
+def _consecutive_retry_count(node: Mapping[str, Any]) -> int:
+    attempts = node.get("attempts", [])
+    reset_at = node.get("retry_reset_at", 0)
+    if isinstance(reset_at, bool) or not isinstance(reset_at, int) or not 0 <= reset_at <= len(attempts):
+        raise ValueError("workflow node has invalid retry reset position")
+    count = 0
+    for attempt in reversed(attempts[reset_at:]):
+        if attempt.get("error_class") is None:
+            break
+        count += 1
+    return count
+
+
+def _retry_delay_remaining(value: Any) -> float:
+    try:
+        timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("workflow node has invalid retry wake time") from exc
+    if timestamp.tzinfo is None:
+        raise ValueError("workflow node retry wake time must include a timezone")
+    return max(0.0, (timestamp - datetime.now(timezone.utc)).total_seconds())
 
 
 def _audit_external_intent(node_id: str, value: Any) -> None:

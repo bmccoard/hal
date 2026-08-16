@@ -4,14 +4,19 @@ import json
 from pathlib import Path
 
 import pytest
+import hal.workflow_worktrees as workflow_worktrees
 
 from hal.workflow_artifacts import WorkflowArtifactHandle, WorkflowArtifactStore
 from hal.workflow_budgets import WorkflowBudgets, WorkflowUsage
-from hal.workflow_runtime import WorkflowNodeReceipt
+from hal.workflow_runtime import (
+    WorkflowNodeReceipt, WorkflowTransientError,
+)
 from hal.workflow_schema import WORKFLOW_DIRECTORY, WorkflowNodeStatus, load_workflow
 from hal.workflow_state import (
-    WORKFLOW_RUN_RECORD_VERSION, WorkflowRunStore, execute_persisted_workflow,
+    WORKFLOW_RUN_RECORD_VERSION, WorkflowRunStore,
+    execute_persisted_concurrent_workflow, execute_persisted_workflow,
 )
+from hal.workflow_worktrees import WorkflowWorktreeIdentity, validate_workspace_claim
 
 
 def _definition(tmp_path: Path):
@@ -90,6 +95,43 @@ def test_attempt_intent_is_durable_before_executor_side_effect(tmp_path: Path) -
     events = store.load(state.run_id).payload["events"]
     names = [event["event"] for event in events]
     assert names.index("attempt_intent") < names.index("attempt_receipt")
+
+
+def test_concurrent_run_pins_validated_workspace_claims_before_dispatch(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    definition = _definition(tmp_path)
+    workspace = tmp_path / "isolated"
+    workspace.mkdir()
+    identity = WorkflowWorktreeIdentity(
+        workspace.resolve(), "abc123", "hal/isolated", "clean", (), True,
+    )
+    monkeypatch.setattr(workflow_worktrees, "inspect_worktree", lambda *_args: identity)
+    claim = validate_workspace_claim(tmp_path, workspace, {
+        "path": str(workspace), "head": identity.head, "branch": identity.branch,
+        "checkpoint_dirty_digest": identity.dirty_digest,
+    })
+    store = WorkflowRunStore(tmp_path / "runs")
+    state = store.create(definition, {}, tmp_path, WorkflowBudgets())
+
+    execute_persisted_concurrent_workflow(
+        definition, {},
+        lambda invocation: WorkflowNodeReceipt(
+            WorkflowNodeStatus.SUCCEEDED, {"report": {}},
+        ),
+        state, max_parallel=2, workspace_claims={"command": claim},
+    )
+
+    payload = store.load(state.run_id).payload
+    assert payload["workspace_claims"] == {
+        "command": {
+            "path": str(workspace.resolve()),
+            "repository": str(tmp_path.resolve()),
+            "branch": "hal/isolated",
+        }
+    }
+    names = [event["event"] for event in payload["events"]]
+    assert names.index("workspace_claims_bound") < names.index("attempt_intent")
 
 
 def test_failure_before_intent_prevents_dispatch(tmp_path: Path, monkeypatch) -> None:
@@ -171,3 +213,134 @@ def test_unknown_record_version_fails_closed(tmp_path: Path) -> None:
     )
     with pytest.raises(ValueError, match="unsupported.*version"):
         store.load("wfrun_0123456789abcdef")
+
+
+def test_loop_attempts_are_individually_journaled(tmp_path: Path) -> None:
+    directory = tmp_path / WORKFLOW_DIRECTORY
+    path = directory / "loop.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("""
+version: 1
+name: loop
+nodes:
+  - id: work
+    type: agent
+    prompt: work
+    outputs:
+      complete: {type: boolean, source: structured_response}
+    loop:
+      max_attempts: 2
+      until: "${{ node.outputs.complete == true }}"
+""".lstrip(), encoding="utf-8")
+    definition = load_workflow(path, tmp_path)
+    store = WorkflowRunStore(tmp_path / "runs")
+    state = store.create(definition, {}, tmp_path, WorkflowBudgets(node_attempts=2))
+    calls = 0
+
+    def execute(_invocation):
+        nonlocal calls
+        calls += 1
+        return WorkflowNodeReceipt(
+            WorkflowNodeStatus.SUCCEEDED, {"complete": False},
+        )
+
+    result = execute_persisted_workflow(definition, {}, execute, state)
+    payload = store.load(state.run_id).payload
+    attempts = payload["nodes"]["work"]["attempts"]
+
+    assert result.status.value == "failed"
+    assert payload["nodes"]["work"]["status"] == "failed"
+    assert [item["id"] for item in attempts] == ["attempt_1", "attempt_2"]
+    assert [item["status"] for item in attempts] == ["succeeded", "succeeded"]
+    assert all(item["receipt_at"] is not None for item in attempts)
+    assert [event["event"] for event in payload["events"]].count("attempt_intent") == 2
+    assert [event["event"] for event in payload["events"]].count("loop_attempt_receipt") == 1
+
+
+def test_transient_retries_are_durably_journaled(tmp_path: Path) -> None:
+    directory = tmp_path / WORKFLOW_DIRECTORY
+    path = directory / "retry.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("""
+version: 1
+name: retry
+nodes:
+  - id: work
+    type: approval
+    prompt: work
+    retry:
+      max_attempts: 2
+      error_classes: [network]
+      initial_backoff_seconds: 0.01
+""".lstrip(), encoding="utf-8")
+    definition = load_workflow(path, tmp_path)
+    store = WorkflowRunStore(tmp_path / "runs")
+    state = store.create(definition, {}, tmp_path, WorkflowBudgets(node_attempts=2))
+
+    class Executor:
+        calls = 0
+        waits = []
+
+        def __call__(self, _invocation):
+            self.calls += 1
+            if self.calls == 1:
+                raise WorkflowTransientError("network", "offline")
+            return WorkflowNodeReceipt(WorkflowNodeStatus.SUCCEEDED)
+
+        def wait_for_retry(self, seconds):
+            self.waits.append(seconds)
+
+    executor = Executor()
+    result = execute_persisted_workflow(definition, {}, executor, state)
+    payload = store.load(state.run_id).payload
+    attempts = payload["nodes"]["work"]["attempts"]
+
+    assert result.status.value == "succeeded"
+    assert executor.waits == [0.01]
+    assert [item["id"] for item in attempts] == ["attempt_1", "attempt_2"]
+    assert attempts[0]["error_class"] == "network"
+    assert attempts[0]["retry_delay_seconds"] == 0.01
+    assert attempts[1]["error_class"] is None
+    assert [event["event"] for event in payload["events"]].count("retry_scheduled") == 1
+    assert "retry_not_before" not in payload["nodes"]["work"]
+
+
+def test_concurrent_attempt_intents_and_receipts_have_one_ordered_journal(
+    tmp_path: Path,
+) -> None:
+    directory = tmp_path / WORKFLOW_DIRECTORY
+    path = directory / "concurrent.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("""
+version: 1
+name: concurrent
+execution:
+  max_parallel: 2
+nodes:
+  - {id: first, type: agent, prompt: first}
+  - {id: second, type: agent, prompt: second}
+""".lstrip(), encoding="utf-8")
+    definition = load_workflow(path, tmp_path)
+    store = WorkflowRunStore(tmp_path / "runs")
+    state = store.create(definition, {}, tmp_path, WorkflowBudgets(node_attempts=2))
+    barrier = __import__("threading").Barrier(2)
+
+    def execute(invocation):
+        assert state.payload["nodes"][invocation.node.id]["status"] == "running"
+        barrier.wait(timeout=2)
+        return WorkflowNodeReceipt(WorkflowNodeStatus.SUCCEEDED)
+
+    result = execute_persisted_concurrent_workflow(
+        definition, {}, execute, state,
+    )
+    payload = store.load(state.run_id).payload
+    events = payload["events"]
+
+    assert result.status.value == "succeeded"
+    assert [event["sequence"] for event in events] == list(range(1, len(events) + 1))
+    intents = [event["node_id"] for event in events if event["event"] == "attempt_intent"]
+    assert intents == ["first", "second"]
+    assert all(
+        payload["nodes"][node_id]["attempts"][0]["receipt_at"] is not None
+        for node_id in ("first", "second")
+    )

@@ -9,6 +9,7 @@ import pytest
 from hal.harness import RunCounters, RunStatus
 from hal.models import Usage
 from hal.workflow_budgets import WorkflowBudgetLedger, WorkflowBudgets
+from hal.workflow_budgets import WorkflowBudgetExhaustedError
 from hal.workflow_nodes import (
     WorkflowNodeDispatcher, execute_agent_node, execute_command_node, execute_git_node,
 )
@@ -52,6 +53,26 @@ def test_command_node_executes_argv_with_bounded_typed_outputs(tmp_path: Path) -
     assert receipt.outputs["code"] == 0
     assert receipt.outputs["report"]["stdout"].strip() == "ok"
     assert receipt.outputs["report"]["stderr"].strip() == "warn"
+
+
+def test_dispatcher_executes_command_in_scheduler_validated_workspace(tmp_path: Path) -> None:
+    node = _node(tmp_path, f"""
+  - id: command
+    type: command
+    command:
+      argv: [{sys.executable!r}, -c, "import os; print(os.getcwd())"]
+    outputs:
+      stdout: {{type: string, source: stdout}}
+""", name="claimed-workspace")
+    isolated = tmp_path / "isolated"
+    isolated.mkdir()
+    dispatcher = WorkflowNodeDispatcher(tmp_path)
+
+    receipt = dispatcher(WorkflowNodeInvocation(
+        node, {}, {"inputs": {}, "nodes": {}}, workspace=isolated,
+    ))
+
+    assert Path(receipt.outputs["stdout"].strip()).resolve() == isolated.resolve()
 
 
 def test_command_node_uses_allowlisted_environment_only(monkeypatch, tmp_path: Path) -> None:
@@ -270,3 +291,52 @@ def test_dispatcher_aggregates_agent_usage_and_node_attempts(tmp_path: Path) -> 
     assert dispatcher.ledger.usage.node_attempts == 1
     assert dispatcher.ledger.usage.provider_calls == 1
     assert dispatcher.ledger.usage.output_tokens == 2
+
+
+def test_loop_attempt_timeout_narrows_agent_harness_budget(tmp_path: Path) -> None:
+    node = _node(tmp_path, """
+  - {id: agent, type: agent, prompt: work}
+""")
+
+    class FakeAgent:
+        last_outcome = None
+
+        def send(self, *_args, **kwargs):
+            self.budgets = kwargs["budgets"]
+            self.last_outcome = SimpleNamespace(
+                status=RunStatus.SUCCEEDED, reason="completed",
+                counters=RunCounters(),
+            )
+            return "done"
+
+    agent = FakeAgent()
+    dispatcher = WorkflowNodeDispatcher(
+        tmp_path, agent=agent,
+        budgets=WorkflowBudgets(elapsed_seconds=20),
+    )
+
+    dispatcher(WorkflowNodeInvocation(
+        node, {}, {"inputs": {}, "nodes": {}},
+        timeout_seconds=2.5,
+    ))
+
+    assert agent.budgets.elapsed_seconds == 2.5
+
+
+def test_retry_backoff_charges_and_cannot_exceed_aggregate_elapsed_budget(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    token = CancellationToken()
+    waited = []
+    monkeypatch.setattr(token, "wait", waited.append)
+    ticks = iter((0.0, 0.1))
+    monkeypatch.setattr("hal.workflow_nodes.time.monotonic", lambda: next(ticks))
+    dispatcher = WorkflowNodeDispatcher(
+        tmp_path, token, budgets=WorkflowBudgets(elapsed_seconds=0.1),
+    )
+
+    with pytest.raises(WorkflowBudgetExhaustedError, match="elapsed_seconds"):
+        dispatcher.wait_for_retry(1.0)
+
+    assert waited == [0.1]
+    assert dispatcher.ledger.usage.elapsed_seconds == pytest.approx(0.1)

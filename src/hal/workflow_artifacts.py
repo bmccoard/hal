@@ -7,10 +7,14 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import tempfile
+import threading
 
 
 DEFAULT_INLINE_LIMIT = 16 * 1024
 DEFAULT_ARTIFACT_LIMIT = 64 * 1024 * 1024
+DEFAULT_STORE_LIMIT = 512 * 1024 * 1024
+MAX_CONCURRENT_ARTIFACT_WRITES = 8
+_GLOBAL_WRITE_SLOTS = threading.BoundedSemaphore(MAX_CONCURRENT_ARTIFACT_WRITES)
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9_-]*\Z")
 
@@ -61,12 +65,24 @@ class WorkflowArtifactStore:
         *,
         inline_limit: int = DEFAULT_INLINE_LIMIT,
         artifact_limit: int = DEFAULT_ARTIFACT_LIMIT,
+        store_limit: int = DEFAULT_STORE_LIMIT,
     ) -> None:
         self.directory = directory.resolve()
-        if inline_limit < 0 or artifact_limit <= 0 or inline_limit > artifact_limit:
-            raise ValueError("artifact limits must satisfy 0 <= inline <= artifact")
+        if (
+            inline_limit < 0 or artifact_limit <= 0 or inline_limit > artifact_limit
+            or store_limit < artifact_limit
+        ):
+            raise ValueError(
+                "artifact limits must satisfy 0 <= inline <= artifact <= store"
+            )
         self.inline_limit = inline_limit
         self.artifact_limit = artifact_limit
+        self.store_limit = store_limit
+        self._write_lock = threading.Lock()
+        objects = self.directory / "objects"
+        self._stored_bytes = sum(
+            path.stat().st_size for path in objects.rglob("*") if path.is_file()
+        ) if objects.is_dir() else 0
 
     def put(
         self,
@@ -87,11 +103,20 @@ class WorkflowArtifactStore:
             return WorkflowArtifact(type, producer, digest, len(data), media_type, inline=data)
         relative = f"objects/{digest[:2]}/{digest}"
         target = self._resolve_location(relative)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.exists():
-            self._verify_file(target, digest, len(data))
-        else:
-            self._atomic_write(target, data)
+        # One run may occupy at most one global artifact-write slot. This bounds
+        # both per-run pressure and total concurrent filesystem writes.
+        with self._write_lock:
+            with _GLOBAL_WRITE_SLOTS:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if target.exists():
+                    self._verify_file(target, digest, len(data))
+                else:
+                    if self._stored_bytes + len(data) > self.store_limit:
+                        raise ValueError(
+                            f"artifact store exceeds {self.store_limit} bytes"
+                        )
+                    self._atomic_write(target, data)
+                    self._stored_bytes += len(data)
         return WorkflowArtifact(
             type, producer, digest, len(data), media_type, location=relative,
         )

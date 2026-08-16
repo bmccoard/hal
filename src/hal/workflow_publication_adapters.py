@@ -15,6 +15,7 @@ from .workflow_publication import (
     PublicationCredentialScope, PublicationIsolationCapability,
     PullRequestAdapter, PullRequestRequest, PullRequestResult, PushAdapter,
 )
+from .workflow_runtime import WorkflowTransientError
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,9 +115,21 @@ class GitHubRESTAPI:
             detail = exc.read(16_384).decode("utf-8", "replace").replace(
                 self.__token, "[redacted]",
             )
+            if exc.code == 429:
+                raise WorkflowTransientError(
+                    "rate_limit", f"GitHub API {exc.code}: {detail}",
+                ) from exc
+            if exc.code in {408, 409} or exc.code >= 500:
+                raise WorkflowTransientError(
+                    "service_unavailable", f"GitHub API {exc.code}: {detail}",
+                ) from exc
             raise RuntimeError(f"GitHub API {exc.code}: {detail}") from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"GitHub API connection failed: {exc.reason}") from exc
+            raise WorkflowTransientError(
+                "network", f"GitHub API connection failed: {exc.reason}",
+            ) from exc
+        except TimeoutError as exc:
+            raise WorkflowTransientError("timeout", "GitHub API timed out") from exc
         cancellation.raise_if_cancelled()
         if len(raw) > 2 * 1024 * 1024:
             raise RuntimeError("GitHub API response exceeded 2 MiB")

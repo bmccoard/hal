@@ -433,7 +433,9 @@ def run_repository_workflow(args: list[str], stdout: TextIO, stderr: TextIO) -> 
             git_backend=getattr(config, "git_backend", "auto"),
             external_intent=state.record_external_intent,
         )
-        from .workflow_state import execute_persisted_workflow
+        from .workflow_state import (
+            execute_persisted_concurrent_workflow, execute_persisted_workflow,
+        )
         lock = (
             WorkflowWorkspaceLock(root / ".hal" / "locks", execution_root, state.run_id)
             if workflow_requires_trust(definition) else nullcontext()
@@ -442,11 +444,18 @@ def run_repository_workflow(args: list[str], stdout: TextIO, stderr: TextIO) -> 
             lambda: _worktree_snapshot(inspect_worktree(root, execution_root, cancellation))
         ) if definition.execution.workspace == "worktree" else None
         with cancel_on_sigint(cancellation), dispatcher.workflow_scope(definition), lock:
-            result = execute_persisted_workflow(
-                definition, validated_inputs, dispatcher, state,
-                usage=lambda: dispatcher.ledger.usage,
-                workspace_snapshot=snapshotter,
-            )
+            if definition.execution.max_parallel > 1:
+                result = execute_persisted_concurrent_workflow(
+                    definition, validated_inputs, dispatcher, state,
+                    usage=lambda: dispatcher.ledger.usage,
+                    workspace_snapshot=snapshotter,
+                )
+            else:
+                result = execute_persisted_workflow(
+                    definition, validated_inputs, dispatcher, state,
+                    usage=lambda: dispatcher.ledger.usage,
+                    workspace_snapshot=snapshotter,
+                )
         payload = {
             "run_id": state.run_id,
             "workflow": definition.name,
@@ -758,6 +767,7 @@ def _resume_workflow_run(
             retry_nodes=retry_nodes,
             usage=lambda: dispatcher.ledger.usage,
             workspace_snapshot=snapshotter,
+            max_parallel=definitions[name].execution.max_parallel,
         )
     return {
         "run_id": state.run_id,

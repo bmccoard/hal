@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
+import threading
+import time
 
 import pytest
 
@@ -71,3 +73,51 @@ def test_artifact_metadata_rejects_ambiguous_storage_and_oversize(tmp_path: Path
     store = WorkflowArtifactStore(tmp_path, inline_limit=4, artifact_limit=4)
     with pytest.raises(ValueError, match="exceeds"):
         store.put(b"12345", type="string", producer="node")
+
+
+def test_artifact_store_bounds_cumulative_bytes_across_restart(tmp_path: Path) -> None:
+    store = WorkflowArtifactStore(
+        tmp_path, inline_limit=0, artifact_limit=10, store_limit=12,
+    )
+    first = store.put(b"1234567", type="diff", producer="first")
+    assert store.put(b"1234567", type="diff", producer="first") == first
+
+    resumed = WorkflowArtifactStore(
+        tmp_path, inline_limit=0, artifact_limit=10, store_limit=12,
+    )
+    with pytest.raises(ValueError, match="store exceeds 12 bytes"):
+        resumed.put(b"abcdef", type="diff", producer="second")
+
+
+def test_one_artifact_store_serializes_its_writes(tmp_path: Path, monkeypatch) -> None:
+    store = WorkflowArtifactStore(tmp_path)
+    original = store._atomic_write
+    lock = threading.Lock()
+    active = maximum = 0
+
+    def slow_write(path, data):
+        nonlocal active, maximum
+        with lock:
+            active += 1
+            maximum = max(maximum, active)
+        time.sleep(0.02)
+        original(path, data)
+        with lock:
+            active -= 1
+
+    monkeypatch.setattr(store, "_atomic_write", slow_write)
+    threads = [
+        threading.Thread(
+            target=store.put,
+            args=(f"value-{index}",),
+            kwargs={"type": "diff", "producer": f"node{index}"},
+        )
+        for index in range(4)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert all(not thread.is_alive() for thread in threads)
+    assert maximum == 1

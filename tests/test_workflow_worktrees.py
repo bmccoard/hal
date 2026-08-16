@@ -7,8 +7,9 @@ import subprocess
 import pytest
 
 from hal.workflow_worktrees import (
-    WorkflowWorkspaceLock, cleanup_isolated_worktree, create_isolated_worktree,
-    inspect_worktree, preflight_worktree, validate_worktree_resume,
+    ValidatedWorkflowWorkspace, WorkflowWorkspaceLock, WorkflowWorktreeIdentity,
+    cleanup_isolated_worktree, create_isolated_worktree, inspect_worktree,
+    preflight_worktree, validate_workspace_claim, validate_worktree_resume,
 )
 
 
@@ -90,3 +91,35 @@ def test_workspace_lock_is_exclusive_and_owner_checked(tmp_path: Path) -> None:
             with second:
                 pass
     assert not first.path.exists()
+
+
+def test_workspace_claims_can_only_be_created_after_current_identity_validation(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    repository = tmp_path / "repo"
+    workspace = tmp_path / "workspace"
+    repository.mkdir()
+    workspace.mkdir()
+    identity = WorkflowWorktreeIdentity(
+        workspace.resolve(), "abc123", "hal/test", "clean", (), True,
+    )
+    monkeypatch.setattr("hal.workflow_worktrees.inspect_worktree", lambda *_args: identity)
+    stored = {
+        "path": str(workspace), "head": "abc123", "branch": "hal/test",
+        "checkpoint_dirty_digest": "clean",
+    }
+
+    claim = validate_workspace_claim(repository, workspace, stored)
+
+    assert claim.path == workspace.resolve()
+    assert claim.repository == repository.resolve()
+    assert claim.branch == "hal/test"
+    with pytest.raises(TypeError, match="must be created"):
+        ValidatedWorkflowWorkspace(workspace, repository, "hal/test")
+
+    stale = WorkflowWorktreeIdentity(
+        workspace.resolve(), "changed", "hal/test", "clean", (), True,
+    )
+    monkeypatch.setattr("hal.workflow_worktrees.inspect_worktree", lambda *_args: stale)
+    with pytest.raises(ValueError, match="HEAD changed"):
+        validate_workspace_claim(repository, workspace, stored)

@@ -234,8 +234,19 @@ arbitrary Python or redefine a built-in type.
 - A node becomes eligible only when its dependency policy is satisfied. The default
   is `all_succeeded`; alternatives such as `all_terminal` must be explicit.
 - Independent eligible nodes may run concurrently up to `execution.max_parallel`.
-  Mutating nodes also acquire a workspace lock unless each operates in a distinct
-  worktree.
+  Read-only nodes may overlap. A workspace, Git, publication, or mutating-agent node
+  is a scheduling barrier against unclaimed or overlapping workspaces. Two such
+  nodes may overlap only when the host supplies distinct validated workspace claims;
+  paths declared by workflow YAML are never accepted as proof of isolation.
+- `max_parallel` is capped at four workers per run. All runs share a bounded
+  sixteen-worker host pool, and each scheduler submits at most its immediately
+  available capacity instead of materializing or queueing the entire ready frontier.
+  Thus a large graph cannot create an unbounded private pool or indefinitely queue
+  ahead of another run.
+- Ready nodes are claimed in stable definition order. Attempt intents are durably
+  ordered before their executors start; completion receipts follow actual completion
+  order with monotonic event sequences, while terminal results remain in graph order.
+  A retry backoff occupies only its branch and does not block unrelated ready work.
 - Conditions use a small, side-effect-free expression language over declared inputs,
   node status, outcomes, and typed outputs. No Python, shell expansion, network
   lookup, filesystem read, or model evaluation is allowed in expressions.
@@ -261,6 +272,21 @@ uses a new harnessed attempt and remains under the original or narrower capabili
 remaining workflow budget, and workspace policy. Neither mechanism may repeat after
 human denial or cancellation unless the user explicitly resumes it.
 
+Retry policy is explicit and is accepted only for node types whose trusted registry
+metadata declares them idempotent. A trusted executor or provider adapter must assign
+the transient error class; workflow YAML cannot reclassify an ordinary failure as
+retryable. `max_attempts` includes the initial attempt, and every backoff interval is
+cancellable, persisted, and charged to the aggregate elapsed-time budget:
+
+```yaml
+retry:
+  max_attempts: 4
+  error_classes: [network, rate_limit, service_unavailable]
+  initial_backoff_seconds: 0.5
+  multiplier: 2
+  max_backoff_seconds: 30
+```
+
 ### Typed inputs, outputs, and artifacts
 
 Nodes exchange declared values rather than depending primarily on prose transcript
@@ -272,6 +298,11 @@ those types.
   marked successful.
 - Artifact references contain identity, type, producer, digest, size, and storage
   location. Large artifacts are referenced, not copied into prompts or journals.
+- Retained non-artifact output is charged against an eight MiB aggregate buffer per
+  run. The content-addressed artifact store accepts at most 64 MiB per object and
+  512 MiB cumulatively, serializes writes from one run, and admits at most eight
+  artifact writes across the process. Existing objects are counted again on restart,
+  so resume cannot reset the storage bound.
 - Passing an artifact to an agent is explicit. HAL renders a bounded summary or gives
   the agent a policy-checked read handle; it does not inject unlimited content.
 - Secret values use a separate opaque secret-reference type, are resolved only for
@@ -294,6 +325,12 @@ semantics; otherwise it becomes `interrupted` and requires an explicit retry or
 operator decision. Definition changes never silently alter an active run: users must
 resume against the pinned definition or explicitly migrate/cancel it.
 
+Per-node workspace claims are opaque objects created only after current Git worktree
+inspection matches the stored path, HEAD, branch, dirty-state checkpoint, and
+registration. Their path, repository, and branch identities are pinned before the
+first attempt. Resume requires the host to validate and supply the same claims;
+missing or changed claims fail closed.
+
 ### Worktree, branch, and concurrency lifecycle
 
 `execution.workspace: worktree` creates an isolated Git worktree and run-specific
@@ -306,6 +343,10 @@ read-only capability. Worktree creation, branch names, concurrency limits, disk
 limits, cancellation cleanup, retention, and recovery are deterministic host
 operations—not model instructions. Cleanup is recoverable by default and never
 deletes a worktree containing uncommitted changes without explicit confirmation.
+
+Workflow definitions are also bounded before scheduling: source files are limited to
+one MiB and graphs to 1,024 nodes. YAML aliases remain forbidden, preventing compact
+definitions from expanding into unbounded in-memory structures.
 
 ### Human approval gates
 

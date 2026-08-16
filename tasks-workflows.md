@@ -165,25 +165,25 @@ unless the task explicitly says they may proceed in parallel.
 
 ## Milestone 4 — bounded control flow and concurrency
 
-- [ ] **WF-400 — bounded node loops.** Implement `max_attempts`, finite timeout, typed
+- [x] **WF-400 — bounded node loops.** Implement `max_attempts`, finite timeout, typed
   `until`, per-attempt IDs, optional fresh context, and remaining-budget enforcement.
   Reject any loop with no finite bound.
   - Depends on: Milestone 3, WF-014, WF-016.
-- [ ] **WF-401 — transient retry policy.** Separate infrastructure retry from semantic
+- [x] **WF-401 — transient retry policy.** Separate infrastructure retry from semantic
   repair with declared error classes, capped attempts, cancellable exponential
   backoff, and no retry after denial or cancellation.
   - Depends on: WF-400.
-- [ ] **WF-402 — dependency policies.** Implement and test `all_succeeded` and
+- [x] **WF-402 — dependency policies.** Implement and test `all_succeeded` and
   `all_terminal`; add any later policy only with explicit skipped/failed semantics.
   - Depends on: WF-200, WF-013.
-- [ ] **WF-403 — concurrent scheduler.** Claim independent ready nodes up to the
+- [x] **WF-403 — concurrent scheduler.** Claim independent ready nodes up to the
   workflow limit while preserving event order, aggregate budgets, cancellation, and
   deterministic terminal results.
   - Depends on: WF-301, WF-402.
-- [ ] **WF-404 — mutation barriers.** Run read-only nodes concurrently, but serialize
+- [x] **WF-404 — mutation barriers.** Run read-only nodes concurrently, but serialize
   workspace mutations unless nodes hold distinct validated workspaces.
   - Depends on: WF-015, WF-403.
-- [ ] **WF-405 — fairness and backpressure.** Bound ready queues, output buffering,
+- [x] **WF-405 — fairness and backpressure.** Bound ready queues, output buffering,
   artifact writes, and per-run worker consumption so one graph cannot starve other
   runs or exhaust memory.
   - Depends on: WF-403.

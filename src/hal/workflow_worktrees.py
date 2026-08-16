@@ -36,6 +36,52 @@ class WorkflowWorktreeIdentity:
     registered: bool
 
 
+class ValidatedWorkflowWorkspace:
+    """Opaque proof that a scheduler workspace was validated by the host."""
+
+    __slots__ = ("_path", "_repository", "_branch")
+    _creation_token = object()
+
+    def __init__(
+        self, path: Path, repository: Path, branch: str, *, _token: object = None,
+    ) -> None:
+        if _token is not self._creation_token:
+            raise TypeError(
+                "validated workflow workspaces must be created by validate_workspace_claim"
+            )
+        self._path = path.resolve()
+        self._repository = repository.resolve()
+        self._branch = branch
+
+    @property
+    def path(self) -> Path:
+        return self._path
+
+    @property
+    def repository(self) -> Path:
+        return self._repository
+
+    @property
+    def branch(self) -> str:
+        return self._branch
+
+
+def validate_workspace_claim(
+    repository: Path,
+    workspace: Path,
+    stored: dict[str, object],
+    cancellation: CancellationToken | None = None,
+) -> ValidatedWorkflowWorkspace:
+    """Return an opaque scheduler claim only for a current registered worktree."""
+    repository, workspace = repository.resolve(), workspace.resolve()
+    identity = inspect_worktree(repository, workspace, cancellation)
+    validate_worktree_resume(stored, identity)
+    return ValidatedWorkflowWorkspace(
+        identity.path, repository, identity.branch,
+        _token=ValidatedWorkflowWorkspace._creation_token,
+    )
+
+
 def preflight_worktree(
     repository: Path,
     run_id: str,

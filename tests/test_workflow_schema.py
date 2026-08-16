@@ -9,6 +9,9 @@ from hal.workflow_schema import (
     ATTEMPT_TERMINAL_STATUSES,
     ATTEMPT_STATUS_TRANSITIONS,
     BUILTIN_NODE_TYPES,
+    MAX_WORKFLOW_NODES,
+    MAX_WORKFLOW_PARALLELISM,
+    MAX_WORKFLOW_SOURCE_BYTES,
     NODE_TERMINAL_STATUSES,
     NODE_STATUS_TRANSITIONS,
     WORKFLOW_DIRECTORY,
@@ -335,6 +338,75 @@ nodes:
         load_workflow(path, tmp_path)
 
 
+def test_retry_policy_is_typed_and_limited_to_idempotent_nodes(tmp_path: Path) -> None:
+    valid = _write_workflow(tmp_path, "retry-valid", """
+version: 1
+name: retry-valid
+nodes:
+  - id: gate
+    type: approval
+    prompt: review
+    retry:
+      max_attempts: 3
+      error_classes: [network, rate_limit]
+      initial_backoff_seconds: 0.25
+      multiplier: 2
+      max_backoff_seconds: 5
+""".lstrip())
+
+    definition = load_workflow(valid, tmp_path)
+
+    assert definition.nodes[0].config["retry"]["max_attempts"] == 3
+    assert definition.nodes[0].config["retry"]["error_classes"] == (
+        "network", "rate_limit",
+    )
+
+    unsafe = _write_workflow(tmp_path, "retry-unsafe", """
+version: 1
+name: retry-unsafe
+nodes:
+  - id: work
+    type: agent
+    prompt: work
+    retry: {max_attempts: 2, error_classes: [network]}
+""".lstrip())
+    with pytest.raises(ValueError, match="only for an idempotent"):
+        load_workflow(unsafe, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("retry", "message"),
+    [
+        ("{max_attempts: 1, error_classes: [network]}", "at least 2"),
+        ("{max_attempts: 2, error_classes: [unknown]}", "drawn from"),
+        ("{max_attempts: 2, error_classes: [network, network]}", "duplicates"),
+        (
+            "{max_attempts: 2, error_classes: [network], multiplier: 0.5}",
+            "multiplier must be at least 1",
+        ),
+        (
+            "{max_attempts: 2, error_classes: [network], "
+            "initial_backoff_seconds: 2, max_backoff_seconds: 1}",
+            "must be at least initial",
+        ),
+    ],
+)
+def test_retry_policy_rejects_invalid_bounds(
+    tmp_path: Path, retry: str, message: str,
+) -> None:
+    path = _write_workflow(tmp_path, "retry-invalid", f"""
+version: 1
+name: retry-invalid
+nodes:
+  - id: gate
+    type: approval
+    prompt: review
+    retry: {retry}
+""".lstrip())
+    with pytest.raises(ValueError, match=message):
+        load_workflow(path, tmp_path)
+
+
 def test_input_defaults_match_their_declared_type(tmp_path: Path) -> None:
     path = _write_workflow(tmp_path, "defaults", """
 version: 1
@@ -489,3 +561,39 @@ nodes:
 """.lstrip())
     with pytest.raises(ValueError, match="source must be one of"):
         load_workflow(path, tmp_path)
+
+
+def test_workflow_definition_pressure_limits_fail_before_scheduling(tmp_path: Path) -> None:
+    excessive_parallelism = _write_workflow(tmp_path, "parallel-limit", f"""
+version: 1
+name: parallel-limit
+execution:
+  max_parallel: {MAX_WORKFLOW_PARALLELISM + 1}
+nodes:
+  - {{id: work, type: agent, prompt: work}}
+""".lstrip())
+    with pytest.raises(ValueError, match="between 1 and"):
+        load_workflow(excessive_parallelism, tmp_path)
+
+    nodes = "\n".join(
+        f"  - {{id: node{i}, type: agent, prompt: work}}"
+        for i in range(MAX_WORKFLOW_NODES + 1)
+    )
+    excessive_nodes = _write_workflow(tmp_path, "node-limit", f"""
+version: 1
+name: node-limit
+nodes:
+{nodes}
+""".lstrip())
+    with pytest.raises(ValueError, match=f"at most {MAX_WORKFLOW_NODES}"):
+        load_workflow(excessive_nodes, tmp_path)
+
+    excessive_source = _write_workflow(tmp_path, "source-limit", f"""
+version: 1
+name: source-limit
+description: {'x' * MAX_WORKFLOW_SOURCE_BYTES}
+nodes:
+  - {{id: work, type: agent, prompt: work}}
+""".lstrip())
+    with pytest.raises(ValueError, match=f"exceeds {MAX_WORKFLOW_SOURCE_BYTES} bytes"):
+        load_workflow(excessive_source, tmp_path)
