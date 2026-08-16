@@ -12,6 +12,7 @@ from .harness import (
     BUILTIN_CAPABILITIES, Capability, RunBudgets, SubagentProfile,
     resolve_capability,
 )
+from .models import REASONING_EFFORTS
 from .verification import VerificationCheck
 
 
@@ -60,6 +61,7 @@ class Config:
     streaming: bool = True
     max_output_tokens: int = 8192
     max_output_continuations: int = 2
+    reasoning_effort: str = ""
     verbose: bool = False
     phases: dict[str, dict[str, str]] = field(default_factory=dict)
     providers: dict[str, ProviderProfile] = field(default_factory=dict)
@@ -122,6 +124,12 @@ class Config:
             raise ValueError(
                 "max_output_continuations must be an integer between 0 and 10"
             )
+        if not isinstance(self.reasoning_effort, str):
+            raise ValueError("reasoning_effort must be a string")
+        self.reasoning_effort = self.reasoning_effort.strip().lower()
+        if self.reasoning_effort and self.reasoning_effort not in REASONING_EFFORTS:
+            choices = ", ".join(sorted(REASONING_EFFORTS))
+            raise ValueError(f"reasoning_effort must be one of: {choices}")
         if self.harness_budgets is not None and not isinstance(
             self.harness_budgets, RunBudgets
         ):
@@ -432,6 +440,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         streaming=_bool(features, "streaming", True),
         max_output_tokens=data.get("max_output_tokens", 8192),
         max_output_continuations=data.get("max_output_continuations", 2),
+        reasoning_effort=data.get("reasoning_effort", ""),
         verbose=_bool(output, "verbose", False),
         phases=dict(data.get("phases") or {}),
         providers=profiles,

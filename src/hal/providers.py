@@ -654,6 +654,8 @@ class MetaProvider(OpenAIProvider):
         # not part of Meta's documented Responses request surface.
         payload.pop("store", None)
         payload.pop("include", None)
+        if request.reasoning_effort:
+            payload["reasoning"] = {"effort": request.reasoning_effort}
         if not request.tools:
             payload.pop("tools", None)
             payload.pop("tool_choice", None)

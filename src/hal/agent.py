@@ -15,7 +15,10 @@ from .harness import (
     compose_run_budgets, compose_tool_policy,
 )
 from .journal import RunJournalStore
-from .models import ContentBlock, Message, Request, Response, StreamDelta, Usage
+from .models import (
+    REASONING_EFFORTS, ContentBlock, Message, Request, Response, StreamDelta,
+    Usage,
+)
 from .providers import Provider
 from .tools import Registry, bound_output
 from .verification import VerificationCheck, VerificationResult, run_verification_check
@@ -162,6 +165,7 @@ class Agent:
                  repair_attempts: int = 0,
                  max_output_tokens: int = 8192,
                  max_output_continuations: int = 2,
+                 reasoning_effort: str = "",
                  journal_store: RunJournalStore | None = None,
                  parent_run_id: str = "") -> None:
         self.provider = provider
@@ -197,6 +201,13 @@ class Agent:
             )
         self.max_output_tokens = max_output_tokens
         self.max_output_continuations = max_output_continuations
+        if not isinstance(reasoning_effort, str):
+            raise ValueError("reasoning_effort must be a string")
+        reasoning_effort = reasoning_effort.strip().lower()
+        if reasoning_effort and reasoning_effort not in REASONING_EFFORTS:
+            choices = ", ".join(sorted(REASONING_EFFORTS))
+            raise ValueError(f"reasoning_effort must be one of: {choices}")
+        self.reasoning_effort = reasoning_effort
         self.journal_store = journal_store
         self.parent_run_id = parent_run_id
         self.journal_errors: list[Exception] = []
@@ -358,6 +369,7 @@ class Agent:
             journal_store=self.journal_store,
             max_output_tokens=self.max_output_tokens,
             max_output_continuations=self.max_output_continuations,
+            reasoning_effort=self.reasoning_effort,
             parent_run_id=parent_run_id,
         )
         try:
@@ -832,6 +844,7 @@ class Agent:
             ),
             tools=self.tools.specs_for(allowed_tools, denied_tools),
             max_tokens=self.max_output_tokens,
+            reasoning_effort=self.reasoning_effort,
         )
 
     def _request_provider(

@@ -71,6 +71,17 @@ def test_output_limits_are_configurable_and_validated() -> None:
             parse_config({"max_output_continuations": value})
 
 
+@pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high", "xhigh"])
+def test_reasoning_effort_is_normalized_and_validated(effort: str) -> None:
+    assert parse_config({"reasoning_effort": effort.upper()}).reasoning_effort == effort
+
+
+@pytest.mark.parametrize("effort", ["none", "maximum", 3, True])
+def test_unknown_reasoning_effort_is_rejected(effort) -> None:
+    with pytest.raises(ValueError, match="reasoning_effort"):
+        parse_config({"reasoning_effort": effort})
+
+
 def test_harness_budgets_are_opt_in_and_parse_all_limits() -> None:
     assert parse_config({}).harness_budgets is None
     config = parse_config({

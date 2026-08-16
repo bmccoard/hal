@@ -728,11 +728,13 @@ def test_clean_text_truncation_continues_within_bound() -> None:
     agent = Agent(
         provider, "model", "system", Registry([]), on_event=events.append,
         max_output_tokens=16_384, max_output_continuations=2,
+        reasoning_effort="xhigh",
     )
 
     assert agent.send("start") == "First half.\nSecond half."
     assert len(provider.requests) == 2
     assert all(request.max_tokens == 16_384 for request in provider.requests)
+    assert all(request.reasoning_effort == "xhigh" for request in provider.requests)
     continuation = provider.requests[1].messages[-1]
     assert continuation.role == "user"
     assert continuation.display_text == "[harness output continuation]"

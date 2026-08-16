@@ -10,6 +10,10 @@ model: openai/gpt-4o-mini
 max_output_tokens: 8192
 max_output_continuations: 2
 
+# Meta Muse Spark Responses API only. Omit to use the provider default.
+# Values: minimal, low, medium, high, xhigh (`none` is not supported).
+# reasoning_effort: medium
+
 # Git operations prefer the installed git executable and fall back to the
 # required Dulwich Python backend. Set this to native or dulwich to require
 # one backend explicitly.

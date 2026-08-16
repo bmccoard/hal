@@ -242,9 +242,7 @@ def test_git_paths_are_repository_relative_and_cannot_escape(tmp_path: Path) -> 
         normalize_paths(root, [".git/config"])
 
 
-@pytest.mark.parametrize(
-    "path", [".env", "hal.local.yaml", ".hal/auth.json"],
-)
+@pytest.mark.parametrize("path", [".env", ".env.local"])
 def test_commit_tool_rejects_known_local_configuration(path: str, tmp_path: Path) -> None:
     root = new_repo(tmp_path)
     target = root / path
@@ -255,6 +253,20 @@ def test_commit_tool_rejects_known_local_configuration(path: str, tmp_path: Path
         GitCommitTool(DulwichGitBackend(root)).run({
             "message": "Do not commit this", "paths": [path],
         })
+
+
+@pytest.mark.parametrize("path", ["hal.local.yaml", ".hal/auth.json", "mail.eml"])
+def test_commit_tool_allows_non_env_files(path: str, tmp_path: Path) -> None:
+    root = new_repo(tmp_path)
+    target = root / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("content", encoding="utf-8")
+
+    result = json.loads(GitCommitTool(DulwichGitBackend(root)).run({
+        "message": "Add allowed file", "paths": [path],
+    }))
+
+    assert result["paths"] == [path]
 
 
 def test_push_tool_rejects_option_and_control_character_arguments(tmp_path: Path) -> None:

@@ -76,6 +76,46 @@ def test_file_tools_reject_empty_paths() -> None:
         EditFileTool().run({"path": "", "old_string": "x", "new_string": "y"})
 
 
+@pytest.mark.parametrize("name", [".env", ".env.local", ".ENV.production"])
+def test_file_tools_reject_env_files(name: str, tmp_path: Path) -> None:
+    path = tmp_path / name
+    path.write_text("SECRET=original", encoding="utf-8")
+
+    with pytest.raises(PermissionError, match="protected .env file"):
+        ReadFileTool().run({"path": str(path)})
+    with pytest.raises(PermissionError, match="protected .env file"):
+        WriteFileTool().run({"path": str(path), "content": "SECRET=changed"})
+    with pytest.raises(PermissionError, match="protected .env file"):
+        EditFileTool().run({
+            "path": str(path), "old_string": "original", "new_string": "changed",
+        })
+    assert path.read_text(encoding="utf-8") == "SECRET=original"
+
+
+@pytest.mark.parametrize("name", ["mail.eml", "settings.yaml", "hal.local.yaml", "auth.json"])
+def test_file_tools_allow_email_yaml_and_other_config(name: str, tmp_path: Path) -> None:
+    path = tmp_path / name
+
+    WriteFileTool().run({"path": str(path), "content": "before"})
+    assert ReadFileTool().run({"path": str(path)}) == "before"
+    EditFileTool().run({
+        "path": str(path), "old_string": "before", "new_string": "after",
+    })
+    assert path.read_text(encoding="utf-8") == "after"
+
+
+def test_grep_skips_env_files_but_searches_yaml_and_email(tmp_path: Path) -> None:
+    (tmp_path / ".env").write_text("needle-secret", encoding="utf-8")
+    (tmp_path / "settings.yaml").write_text("needle-yaml", encoding="utf-8")
+    (tmp_path / "mail.eml").write_text("needle-email", encoding="utf-8")
+
+    matches = json.loads(GrepTool(tmp_path).run({"pattern": "needle"}))["matches"]
+
+    assert {match["path"] for match in matches} == {"settings.yaml", "mail.eml"}
+    with pytest.raises(PermissionError, match="protected .env file"):
+        GrepTool(tmp_path).run({"pattern": "needle", "path": ".env"})
+
+
 def test_read_file_requires_paging_for_oversized_files(tmp_path: Path) -> None:
     path = tmp_path / "large.txt"
     path.write_bytes(b"x" * (MAX_RESULT + 1))

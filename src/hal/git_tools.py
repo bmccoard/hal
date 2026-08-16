@@ -8,19 +8,13 @@ from typing import Any
 from .cancellation import CancellationToken
 from .git import GitBackend, create_git_backend, normalize_paths
 from .models import ToolSpec
-from .tools import ToolEffect
+from .tools import ToolEffect, is_env_file
 
 
 def sensitive_git_paths(paths: list[str]) -> list[str]:
     sensitive: list[str] = []
     for path in paths:
-        normalized = path.replace("\\", "/").casefold()
-        name = Path(normalized).name
-        if (
-            name == ".env" or name.startswith(".env.")
-            or name.endswith(".local.yaml")
-            or normalized == ".hal/auth.json"
-        ):
+        if is_env_file(path):
             sensitive.append(path)
     return sensitive
 

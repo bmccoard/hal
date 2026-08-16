@@ -173,6 +173,7 @@ def _make_agent(config: Config, cwd: Path, session: Session | None = None, inter
                   workspace=root, repair_attempts=config.repair_attempts,
                   max_output_tokens=config.max_output_tokens,
                   max_output_continuations=config.max_output_continuations,
+                  reasoning_effort=config.reasoning_effort,
                   journal_store=RunJournalStore(SessionStore().directory / "runs"))
     registry.bind_agent(agent)
     return agent, skills, phases
@@ -254,6 +255,7 @@ def run_harness(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
             "repair_attempts": config.repair_attempts,
             "max_output_tokens": config.max_output_tokens,
             "max_output_continuations": config.max_output_continuations,
+            "reasoning_effort": config.reasoning_effort or None,
             "bash_policy": config.bash_policy,
             "only_write_locally": config.only_write_locally,
             "tool_approvals": list(config.tool_approvals),
@@ -274,6 +276,10 @@ def run_harness(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
             "Provider output: "
             f"{payload['max_output_tokens']} tokens, "
             f"{payload['max_output_continuations']} continuation(s)",
+            file=stdout,
+        )
+        print(
+            f"Reasoning effort: {payload['reasoning_effort'] or 'provider default'}",
             file=stdout,
         )
         print(f"Verification: {', '.join(payload['verification']) or 'none'}", file=stdout)

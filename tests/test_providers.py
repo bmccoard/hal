@@ -94,8 +94,27 @@ def test_meta_provider_uses_responses_endpoint_and_bearer_key(monkeypatch) -> No
     }]
     assert "store" not in captured["payload"]
     assert "include" not in captured["payload"]
+    assert "reasoning" not in captured["payload"]
     assert "tools" not in captured["payload"]
     assert captured["headers"] == {"Authorization": "Bearer meta-placeholder"}
+
+
+def test_meta_provider_sends_responses_reasoning_effort(monkeypatch) -> None:
+    provider = MetaProvider("meta-placeholder")
+    captured = {}
+
+    def fake_post(url, payload, headers, cancellation=None):
+        captured.update(payload)
+        return {"status": "completed", "output": [], "usage": {}}
+
+    monkeypatch.setattr(provider, "_post", fake_post)
+    provider.complete(Request(
+        "muse-spark-1.2-contributor", "system",
+        [Message("user", [ContentBlock("text", text="hello")])], [],
+        reasoning_effort="xhigh",
+    ))
+
+    assert captured["reasoning"] == {"effort": "xhigh"}
 
 
 def test_meta_provider_allows_preview_endpoint_override(monkeypatch) -> None:

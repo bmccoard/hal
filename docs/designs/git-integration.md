@@ -31,8 +31,8 @@ packages are permitted.
 | `git_push` | Remote | Push an explicitly requested branch and remote. |
 
 `git_commit` rejects empty path lists, paths outside the repository, `.git` internals,
-known local credential files (`.env` variants, `*.local.yaml`, and
-`.hal/auth.json`), and already-staged paths outside the requested set. Its result
+known local credential files (`.env` variants), and already-staged paths outside the
+requested set. Its result
 always states that the commit was not pushed. `git_push` remains separate so local
 check-in authorization cannot silently become a remote mutation.
 

@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 Role = Literal["user", "assistant", "tool"]
 DeltaKind = Literal["text", "commentary"]
+REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 
 
 @dataclass(slots=True)
@@ -91,6 +92,7 @@ class Request:
     messages: list[Message]
     tools: list[ToolSpec]
     max_tokens: int = 8192
+    reasoning_effort: str = ""
 
 
 @dataclass(slots=True)

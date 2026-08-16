@@ -110,6 +110,7 @@ def test_system_prompt_defaults_questions_and_examples_to_read_only(
     assert "Configured backend preference: auto" in normalized
     assert "Use git_init" in normalized
     assert "git_stage" in normalized
-    assert "Never read, quote, rewrite, or stage files that the Git tools refuse" in normalized
+    assert "Never read, quote, rewrite, or stage .env or .env.* files" in normalized
+    assert "including email files, YAML files, .hal/auth.json" in normalized
     assert "Never push" in normalized
     assert "# Runtime environment\n- test shell" in system

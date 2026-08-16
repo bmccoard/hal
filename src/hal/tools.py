@@ -26,6 +26,22 @@ DEFAULT_IGNORED_DIRECTORIES = {
 }
 
 
+def is_env_file(path: str | Path) -> bool:
+    """Return whether a path names a protected dotenv file."""
+    candidate = Path(path)
+    names = {candidate.name.casefold()}
+    try:
+        names.add(candidate.resolve().name.casefold())
+    except OSError:
+        pass
+    return any(name == ".env" or name.startswith(".env.") for name in names)
+
+
+def _reject_env_file(path: Path, action: str) -> None:
+    if is_env_file(path):
+        raise PermissionError(f"refusing to {action} protected .env file: {path}")
+
+
 def bound_output(text: str, limit: int = MAX_RESULT) -> str:
     output = BoundedOutput(limit)
     output.write(text)
@@ -161,7 +177,7 @@ class ReadFileTool(Tool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("read_file", "Read a UTF-8 text file. offset is a positive 1-indexed line number; omit it to start at line 1.", {
+        return ToolSpec("read_file", "Read a UTF-8 text file other than .env files. offset is a positive 1-indexed line number; omit it to start at line 1.", {
             "type": "object", "properties": {"path": {"type": "string"}, "offset": {"type": "integer", "minimum": 1}, "limit": {"type": "integer", "minimum": 1}}, "required": ["path"]
         })
 
@@ -173,6 +189,7 @@ class ReadFileTool(Tool):
         if not isinstance(raw_path, str) or not raw_path:
             raise ValueError("path is required")
         path = Path(raw_path)
+        _reject_env_file(path, "read")
         has_window = "offset" in arguments or "limit" in arguments
         if not has_window:
             if path.stat().st_size > MAX_RESULT:
@@ -244,7 +261,7 @@ class WriteFileTool(Tool):
     effect = ToolEffect.MUTATING
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("write_file", "Write a UTF-8 file, creating parent directories.", {
+        return ToolSpec("write_file", "Write a UTF-8 file other than .env files, creating parent directories.", {
             "type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}}, "required": ["path", "content"]
         })
 
@@ -255,6 +272,7 @@ class WriteFileTool(Tool):
         if not isinstance(raw_path, str) or not raw_path or not isinstance(content, str):
             raise ValueError("path and string content are required")
         path = Path(raw_path)
+        _reject_env_file(path, "write")
         _atomic_write(path, content, cancellation)
         return f"wrote {len(content.encode('utf-8'))} bytes to {path}"
 
@@ -263,7 +281,7 @@ class EditFileTool(Tool):
     effect = ToolEffect.MUTATING
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("edit_file", "Replace exactly one occurrence of text in a UTF-8 file.", {
+        return ToolSpec("edit_file", "Replace exactly one occurrence of text in a UTF-8 file other than .env files.", {
             "type": "object", "properties": {"path": {"type": "string"}, "old_string": {"type": "string"}, "new_string": {"type": "string"}}, "required": ["path", "old_string", "new_string"]
         })
 
@@ -277,6 +295,7 @@ class EditFileTool(Tool):
         if not isinstance(raw_path, str) or not raw_path or not isinstance(old, str) or not isinstance(new, str) or not old:
             raise ValueError("path, non-empty old_string, and new_string are required")
         path = Path(raw_path)
+        _reject_env_file(path, "edit")
         text = path.read_text(encoding="utf-8")
         count = text.count(old)
         if count != 1:
@@ -363,6 +382,8 @@ class GrepTool(_RootedTool):
         base = (self.root / str(arguments.get("path", "."))).resolve()
         if not self._within_root(base):
             raise ValueError("search path escapes workspace root")
+        if base.is_file() and is_env_file(base):
+            raise PermissionError(f"refusing to search protected .env file: {base}")
         include = str(arguments.get("include", "*"))
         matches: list[dict[str, Any]] = []
         candidates = [base] if base.is_file() else base.rglob("*")
@@ -370,7 +391,10 @@ class GrepTool(_RootedTool):
             cancellation.raise_if_cancelled()
             if len(matches) >= 200:
                 break
-            if not path.is_file() or not self._within_root(path) or not fnmatch.fnmatch(path.name, include):
+            if (
+                not path.is_file() or not self._within_root(path)
+                or is_env_file(path) or not fnmatch.fnmatch(path.name, include)
+            ):
                 continue
             try:
                 if path.stat().st_size > 4 * 1024 * 1024:

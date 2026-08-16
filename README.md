@@ -38,15 +38,16 @@ python -m hal --help
 
 HAL loads the first file that exists: `./hal.yaml`, then
 `~/.hal/config.yaml`, then built-in defaults. Files are not merged. Copy
-[`hal.yaml.example`](hal.yaml.example) to `hal.yaml`, keep secrets in `.env`,
-keep machine-specific overrides in ignored `*.local.yaml` files, and commit
-`hal.yaml` only when it contains shareable configuration.
+[`hal.yaml.example`](hal.yaml.example) to `hal.yaml` and keep secrets in `.env`.
+HAL may read and write YAML and email files, but its structured content tools reject
+`.env` and `.env.*` files.
 
 ```yaml
 provider: anthropic
 model: claude-opus-5
 max_output_tokens: 8192
 max_output_continuations: 2
+# reasoning_effort: medium  # Meta Muse Spark: minimal/low/medium/high/xhigh
 
 compaction:
   context_window_tokens: 200000
@@ -77,6 +78,7 @@ but changing them does not currently alter runtime behavior.
 | `features.streaming` | Active | Streams interactive responses incrementally when supported; disable it to require buffered responses. |
 | `max_output_tokens` | Active | Sets the maximum output tokens requested on every provider call. |
 | `max_output_continuations` | Active | Automatically resumes clean text-only token truncations up to this limit; `0` disables continuation. |
+| `reasoning_effort` | Active for Meta | Sends Muse Spark Responses reasoning effort: `minimal`, `low`, `medium`, `high`, or `xhigh`. Omit it to use Meta's default. |
 | `git.backend` | Active | Selects `auto`, `native`, or `dulwich`; `auto` prefers the Git executable and otherwise uses Dulwich when the optional `git` extra is installed. |
 | `harness.budgets` | Active | Applies per-send provider-call, tool-call, elapsed-time, input-token, and output-token limits in headless and interactive modes. |
 | `harness.default_capability` | Active | Optionally constrains ordinary sends to the built-in `inspect`, `plan`, `change`, or `review` policy. |
@@ -233,6 +235,7 @@ provider: meta
 model: muse-spark-1.2-contributor
 max_output_tokens: 16384
 max_output_continuations: 2
+reasoning_effort: high
 ```
 
 ```dotenv
@@ -253,6 +256,11 @@ consume the same harness provider-call, elapsed-time, input-token, and output-to
 budgets. Recognized provider reasoning metadata may accompany the text and is
 preserved opaquely. HAL does not automatically continue empty, unknown structured,
 or malformed truncations because replaying an incomplete structure could be unsafe.
+
+For Muse Spark, optional `reasoning_effort` controls Meta's reasoning depth through
+the Responses API. Supported values are `minimal`, `low`, `medium`, `high`, and
+`xhigh`; `none` is rejected because Muse Spark requires reasoning. Omit the setting
+to retain Meta's provider default. Higher effort can increase latency and token use.
 
 Custom OpenAI-compatible gateways can be defined as named profiles. Keep private
 endpoint URLs and credentials in `.env`; `hal.yaml` contains only their environment
@@ -539,9 +547,9 @@ used native Git or Dulwich. HAL instructs the model not to probe for or install
 tools are available.
 
 Use `git_stage` and `git_unstage` when explicitly managing the index. Staging
-accepts only explicit paths and refuses known local configuration and credential
-files. Unstaging preserves working files, including a sensitive file that was
-staged outside HAL. `git_diff` omits known sensitive paths even if another process
+accepts only explicit paths and refuses `.env` credential files. Unstaging preserves
+working files, including a sensitive file that was staged outside HAL. `git_diff`
+omits `.env` paths even if another process
 put them in the index, so their contents do not enter the model transcript. HAL
 reports the omitted path but must not quote or rewrite its contents merely to make
 it committable.
