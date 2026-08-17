@@ -327,6 +327,8 @@ These are operating-system shell commands, not model tools or skills:
 | `hal tui` | Requires the full-screen interface and reports an error on unsupported terminals. |
 | `hal run "..."` | Runs one prompt and exits without creating a session. |
 | `hal run --json "..."` | Runs one headless prompt and returns JSON containing status, timing, tool counts, and the final answer. |
+| `hal workflow inspect <name> --json` | Validates a repository workflow and reports its trust digest and effects. |
+| `hal workflow run <name> --trust-digest <digest> --json` | Runs a trusted repository workflow and returns its terminal node results as JSON. |
 | `hal sessions` | Lists saved sessions in a compact view with short selectors. |
 | `hal sessions --verbose` | Lists full provider, model, path, and title details. |
 | `hal sessions search parser` | Searches saved transcripts for `parser`. |
@@ -336,6 +338,10 @@ These are operating-system shell commands, not model tools or skills:
 `hal run "run tests"` asks the model to run tests; it does not execute a fixed
 test command itself. The model normally fulfills that request with its shell
 tool.
+
+Repository workflow runs print concise node-start and node-completion updates to
+standard error, including elapsed time and failure reasons. With `--json`, standard
+output remains a single machine-readable JSON document.
 
 The TUI uses plain `Enter` or `F2` to send. Use `Ctrl+J`, `F3`, `Shift+Enter`,
 or the visible **New line** button to add a line. Use `F4` or the visible **Paste**

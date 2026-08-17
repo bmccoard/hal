@@ -28,7 +28,7 @@ from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
 from .workflow_inspect import (
     inspect_builtin_workflow, inspect_repository_workflow, workflow_summary,
 )
-from .workflow_schema import discover_workflows, resolve_workflow_names
+from .workflow_schema import WorkflowNodeStatus, discover_workflows, resolve_workflow_names
 from .workflow_artifacts import WorkflowArtifactStore
 from .workflow_approvals import (
     WorkflowApprovalDecision, authorize_approval_decision, pending_approval,
@@ -417,6 +417,36 @@ def run_repository_workflow(args: list[str], stdout: TextIO, stderr: TextIO) -> 
         state = store.create(
             definition, validated_inputs, root, definition.execution.budgets,
         )
+        node_positions = {
+            node.id: (index, node.type)
+            for index, node in enumerate(definition.nodes, start=1)
+        }
+
+        def report_progress(node_id, status, elapsed_seconds, reason):
+            index, node_type = node_positions[node_id]
+            prefix = (
+                f"[workflow {state.run_id}] "
+                f"{index}/{len(definition.nodes)} {node_id} ({node_type})"
+            )
+            if status is WorkflowNodeStatus.RUNNING:
+                message = f"{prefix}: started"
+            else:
+                duration = (
+                    f" in {elapsed_seconds:.1f}s"
+                    if elapsed_seconds is not None else ""
+                )
+                message = f"{prefix}: {status.value}{duration}"
+                if reason and status is not WorkflowNodeStatus.SUCCEEDED:
+                    concise_reason = " ".join(str(reason).split())
+                    message += f" — {concise_reason[:300]}"
+            print(message, file=stderr, flush=True)
+
+        print(
+            f"[workflow {state.run_id}] {definition.name}: started "
+            f"({len(definition.nodes)} nodes)",
+            file=stderr,
+            flush=True,
+        )
         if workflow_requires_trust(definition):
             state.attach_trust(
                 definition.source.digest,
@@ -465,12 +495,14 @@ def run_repository_workflow(args: list[str], stdout: TextIO, stderr: TextIO) -> 
                     definition, validated_inputs, dispatcher, state,
                     usage=lambda: dispatcher.ledger.usage,
                     workspace_snapshot=snapshotter,
+                    on_progress=report_progress,
                 )
             else:
                 result = execute_persisted_workflow(
                     definition, validated_inputs, dispatcher, state,
                     usage=lambda: dispatcher.ledger.usage,
                     workspace_snapshot=snapshotter,
+                    on_progress=report_progress,
                 )
         payload = {
             "run_id": state.run_id,

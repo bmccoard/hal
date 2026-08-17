@@ -24,6 +24,9 @@ from .workflow_worktrees import ValidatedWorkflowWorkspace
 
 WORKFLOW_RUN_RECORD_VERSION = 1
 _RUN_ID = re.compile(r"wfrun_[0-9a-f]{16}\Z")
+WorkflowProgressObserver = Callable[
+    [str, WorkflowNodeStatus, float | None, str | None], None
+]
 
 
 def _now() -> str:
@@ -541,17 +544,24 @@ def execute_persisted_workflow(
     state: WorkflowRunState,
     usage: Callable[[], WorkflowUsage] = WorkflowUsage,
     workspace_snapshot: Callable[[], Mapping[str, Any]] | None = None,
+    on_progress: WorkflowProgressObserver | None = None,
 ) -> WorkflowRunRecord:
     """Run with intent persisted before dispatch and receipt persisted afterward."""
     def transition(node_id, current, target):
         state.update_usage(usage())
         state.transition(node_id, current, target)
+        if on_progress is not None and target is WorkflowNodeStatus.RUNNING:
+            on_progress(node_id, target, None, None)
 
     def receipt(node_id, record):
         state.update_usage(usage())
         if workspace_snapshot is not None:
             state.update_workspace_checkpoint(**workspace_snapshot())
         state.receipt(node_id, record)
+        if on_progress is not None:
+            on_progress(
+                node_id, record.status, record.attempt_elapsed_seconds, record.reason,
+            )
 
     def loop_continue(node_id, record):
         state.update_usage(usage())
@@ -581,6 +591,7 @@ def execute_persisted_concurrent_workflow(
     *,
     max_parallel: int | None = None,
     workspace_claims: Mapping[str, ValidatedWorkflowWorkspace] | None = None,
+    on_progress: WorkflowProgressObserver | None = None,
 ) -> WorkflowRunRecord:
     """Run a bounded concurrent DAG with atomic intents and ordered durable events."""
     if workspace_claims:
@@ -588,12 +599,18 @@ def execute_persisted_concurrent_workflow(
     def transition(node_id, current, target):
         state.update_usage(usage())
         state.transition(node_id, current, target)
+        if on_progress is not None and target is WorkflowNodeStatus.RUNNING:
+            on_progress(node_id, target, None, None)
 
     def receipt(node_id, record):
         state.update_usage(usage())
         if workspace_snapshot is not None:
             state.update_workspace_checkpoint(**workspace_snapshot())
         state.receipt(node_id, record)
+        if on_progress is not None:
+            on_progress(
+                node_id, record.status, record.attempt_elapsed_seconds, record.reason,
+            )
 
     def attempt_continue(node_id, record):
         state.update_usage(usage())

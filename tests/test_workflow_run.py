@@ -45,13 +45,18 @@ nodes:
     assert not (tmp_path / ".hal" / "runs").exists()
 
     output = io.StringIO()
+    progress = io.StringIO()
     assert main([
         "workflow", "run", "runnable", "--input", "message=hello",
         "--trust-digest", definition.source.digest, "--json",
-    ], stdout=output, stderr=io.StringIO()) == 0
+    ], stdout=output, stderr=progress) == 0
 
     payload = json.loads(output.getvalue())
     assert payload["status"] == "succeeded"
+    progress_text = progress.getvalue()
+    assert f"[workflow {payload['run_id']}] runnable: started (1 nodes)" in progress_text
+    assert "1/1 command (command): started" in progress_text
+    assert "1/1 command (command): succeeded in " in progress_text
     record = tmp_path / ".hal" / "runs" / f"{payload['run_id']}.json"
     assert json.loads(record.read_text(encoding="utf-8"))["inputs"] == {"message": "hello"}
 
