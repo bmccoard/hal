@@ -51,7 +51,7 @@ from .workflow_state import WorkflowRunStore
 from .subagents import DelegateTool
 
 
-USAGE = """HAL — a Python coding agent
+USAGE = """HAL ��� a Python coding agent
 
 USAGE:
   hal                Interactive chat mode (TUI; falls back to the basic REPL)
@@ -266,7 +266,7 @@ def run_harness(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
     if json_output:
         print(json.dumps(payload, indent=2), file=stdout)
     else:
-        print(f"Capability: {payload['capability']} — {payload['description']}", file=stdout)
+        print(f"Capability: {payload['capability']} ��� {payload['description']}", file=stdout)
         print(f"Workspace: {payload['workspace']}", file=stdout)
         print(f"Available tools: {', '.join(available) or 'none'}", file=stdout)
         print(f"Denied tools: {', '.join(payload['denied_tools']) or 'none'}", file=stdout)
@@ -554,7 +554,7 @@ def _workflow_progress_reporter(run_id, nodes, stderr: TextIO):
             message = f"{prefix}: {status.value}{duration}"
             if reason and status is not WorkflowNodeStatus.SUCCEEDED:
                 concise_reason = " ".join(str(reason).split())
-                message += f" — {concise_reason[:300]}"
+                message += f" ��� {concise_reason[:300]}"
         print(message, file=stderr, flush=True)
 
     return report
@@ -1152,7 +1152,7 @@ def run_chat(stdout: TextIO, stderr: TextIO, session_id: str | None = None) -> i
             session = store.create(Metadata(cwd=str(cwd), model=cfg.model, provider=cfg.provider, openai_auth=cfg.openai_auth if cfg.provider == "openai" else ""))
         _set_console_title_from_cwd()
         print(f"HAL · {cfg.provider}/{cfg.model} · {cwd}", file=stdout)
-        print(f"“{startup_saying()}”", file=stdout)
+        print(f"�ǣ{startup_saying()}�ǥ", file=stdout)
         print("Type /help for commands; Ctrl-D or /exit to quit.", file=stdout)
         while True:
             try: text = input("HAL> ").strip()
