@@ -18,7 +18,7 @@ from .workflow_schema import (
     WorkflowDefinition, WorkflowNodeStatus,
 )
 from .workflow_policy import workflow_required_effects, workflow_requires_trust
-from .workflow_state import WorkflowRunState
+from .workflow_state import WorkflowProgressObserver, WorkflowRunState
 from .workflow_worktrees import ValidatedWorkflowWorkspace
 
 
@@ -160,6 +160,7 @@ def resume_persisted_workflow(
     workspace_snapshot: Callable[[], Mapping[str, Any]] | None = None,
     max_parallel: int | None = None,
     workspace_claims: Mapping[str, ValidatedWorkflowWorkspace] | None = None,
+    on_progress: WorkflowProgressObserver | None = None,
 ) -> WorkflowRunRecord:
     """Resume audited state without rerunning successful nodes."""
     audit = audit_workflow_resume(
@@ -191,6 +192,20 @@ def resume_persisted_workflow(
         if status is WorkflowNodeStatus.SUCCEEDED:
             raise ValueError(f"successful node {node_id!r} cannot be retried")
         state.recover_node(node_id, WorkflowNodeStatus.PENDING, "explicit retry authorized")
+    reopened = set(retry_nodes)
+    for node in definition.nodes:
+        raw = state.payload["nodes"][node.id]
+        if (
+            raw["status"] == WorkflowNodeStatus.SKIPPED.value
+            and raw.get("reason") == "dependency did not succeed"
+            and reopened.intersection(node.depends_on)
+        ):
+            state.recover_node(
+                node.id,
+                WorkflowNodeStatus.PENDING,
+                "dependency-skipped descendant reopened by upstream retry",
+            )
+            reopened.add(node.id)
     if needs_decision:
         raise PermissionError(
             "explicit retry is required for indeterminate node(s): "
@@ -200,12 +215,18 @@ def resume_persisted_workflow(
     def transition(node_id, current, target):
         state.update_usage(usage())
         state.transition(node_id, current, target)
+        if on_progress is not None and target is WorkflowNodeStatus.RUNNING:
+            on_progress(node_id, target, None, None)
 
     def receipt(node_id, record):
         state.update_usage(usage())
         if workspace_snapshot is not None:
             state.update_workspace_checkpoint(**workspace_snapshot())
         state.receipt(node_id, record)
+        if on_progress is not None:
+            on_progress(
+                node_id, record.status, record.attempt_elapsed_seconds, record.reason,
+            )
 
     def loop_continue(node_id, record):
         state.update_usage(usage())

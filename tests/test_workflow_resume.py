@@ -374,3 +374,62 @@ def test_indeterminate_nonresumable_node_requires_explicit_retry(tmp_path: Path)
     )
     assert result.status.value == "succeeded"
     assert calls == ["work"]
+
+
+def test_retry_reopens_dependency_skipped_descendants(tmp_path: Path) -> None:
+    directory = tmp_path / WORKFLOW_DIRECTORY
+    directory.mkdir(parents=True)
+    path = directory / "retry-descendants.yaml"
+    path.write_text("""
+version: 1
+name: retry-descendants
+nodes:
+  - id: audit
+    type: agent
+    capability: plan
+    prompt: audit
+  - id: implement
+    type: agent
+    capability: plan
+    prompt: implement
+    depends_on: [audit]
+  - id: verify
+    type: agent
+    capability: plan
+    prompt: verify
+    depends_on: [implement]
+""".lstrip(), encoding="utf-8")
+    definition = load_workflow(path, tmp_path)
+    artifacts = WorkflowArtifactStore(tmp_path / "artifacts")
+    store = WorkflowRunStore(tmp_path / "runs")
+    state = store.create(definition, {}, tmp_path, WorkflowBudgets())
+
+    failed = execute_persisted_workflow(
+        definition,
+        {},
+        lambda invocation: WorkflowNodeReceipt(
+            WorkflowNodeStatus.BUDGET_EXHAUSTED
+            if invocation.node.id == "audit" else WorkflowNodeStatus.SUCCEEDED,
+        ),
+        state,
+    )
+    assert failed.status.value == "budget_exhausted"
+    assert [failed.node(node).status for node in ("implement", "verify")] == [
+        WorkflowNodeStatus.SKIPPED,
+        WorkflowNodeStatus.SKIPPED,
+    ]
+
+    calls = []
+    resumed = resume_persisted_workflow(
+        store.load(state.run_id),
+        definition,
+        artifacts,
+        lambda invocation: (
+            calls.append(invocation.node.id)
+            or WorkflowNodeReceipt(WorkflowNodeStatus.SUCCEEDED)
+        ),
+        retry_nodes=frozenset({"audit"}),
+    )
+
+    assert resumed.status.value == "succeeded"
+    assert calls == ["audit", "implement", "verify"]

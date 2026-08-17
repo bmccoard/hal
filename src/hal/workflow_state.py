@@ -503,8 +503,15 @@ class WorkflowRunState:
     def commit_migration(
         self, workflow: dict[str, Any], graph: list[dict[str, Any]],
         new_nodes: tuple[str, ...], actor: str, reason: str,
+        budgets: dict[str, Any],
     ) -> None:
         previous = dict(self.payload["workflow"])
+        for name, used in self.payload["usage"].items():
+            limit = budgets.get(name)
+            if limit is not None and used > limit:
+                raise ValueError(
+                    f"migration budget {name!r} is below existing usage"
+                )
         self.payload.setdefault("migrations", []).append({
             "from_digest": previous["digest"],
             "to_digest": workflow["digest"],
@@ -515,6 +522,7 @@ class WorkflowRunState:
         self.payload["workflow"] = workflow
         self.payload["trust"] = None
         self.payload["graph"] = graph
+        self.payload["budgets"] = budgets
         for node_id in new_nodes:
             self.payload["nodes"][node_id] = {
                 "status": "pending", "attempts": [], "outcome": None,

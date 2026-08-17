@@ -10,24 +10,29 @@ from hal.workflow_schema import WORKFLOW_DIRECTORY, WorkflowNodeStatus, load_wor
 from hal.workflow_state import WorkflowRunStore
 
 
-def _write(root: Path, nodes: str, inputs: str = ""):
+def _write(root: Path, nodes: str, inputs: str = "", execution: str = ""):
     directory = root / WORKFLOW_DIRECTORY
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "migration.yaml"
     path.write_text(
-        f"version: 1\nname: migration\n{inputs}nodes:\n{nodes}", encoding="utf-8",
+        f"version: 1\nname: migration\n{execution}{inputs}nodes:\n{nodes}",
+        encoding="utf-8",
     )
     return load_workflow(path, root)
 
 
 def test_explicit_migration_preserves_digest_history_and_adds_pending_nodes(tmp_path: Path) -> None:
-    original = _write(tmp_path, "  - {id: first, type: agent, prompt: first}\n")
+    original = _write(
+        tmp_path,
+        "  - {id: first, type: agent, prompt: first}\n",
+        execution="execution: {budgets: {provider_calls: 10}}\n",
+    )
     store = WorkflowRunStore(tmp_path / "runs")
-    state = store.create(original, {}, tmp_path, WorkflowBudgets())
+    state = store.create(original, {}, tmp_path, original.execution.budgets)
     updated = _write(tmp_path, """
   - {id: first, type: agent, prompt: revised prompt}
   - {id: second, type: agent, prompt: second, depends_on: [first]}
-""")
+""", execution="execution: {budgets: {provider_calls: 50}}\n")
 
     migrate_workflow_definition(
         state, updated, actor="tester", reason="add validation step",
@@ -44,6 +49,7 @@ def test_explicit_migration_preserves_digest_history_and_adds_pending_nodes(tmp_
     }]
     assert persisted["nodes"]["first"]["status"] == "pending"
     assert persisted["nodes"]["second"]["status"] == "pending"
+    assert persisted["budgets"]["provider_calls"] == 50
     assert persisted["events"][-1]["event"] == "definition_migrated"
 
 

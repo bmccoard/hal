@@ -417,30 +417,9 @@ def run_repository_workflow(args: list[str], stdout: TextIO, stderr: TextIO) -> 
         state = store.create(
             definition, validated_inputs, root, definition.execution.budgets,
         )
-        node_positions = {
-            node.id: (index, node.type)
-            for index, node in enumerate(definition.nodes, start=1)
-        }
-
-        def report_progress(node_id, status, elapsed_seconds, reason):
-            index, node_type = node_positions[node_id]
-            prefix = (
-                f"[workflow {state.run_id}] "
-                f"{index}/{len(definition.nodes)} {node_id} ({node_type})"
-            )
-            if status is WorkflowNodeStatus.RUNNING:
-                message = f"{prefix}: started"
-            else:
-                duration = (
-                    f" in {elapsed_seconds:.1f}s"
-                    if elapsed_seconds is not None else ""
-                )
-                message = f"{prefix}: {status.value}{duration}"
-                if reason and status is not WorkflowNodeStatus.SUCCEEDED:
-                    concise_reason = " ".join(str(reason).split())
-                    message += f" — {concise_reason[:300]}"
-            print(message, file=stderr, flush=True)
-
+        report_progress = _workflow_progress_reporter(
+            state.run_id, definition.nodes, stderr,
+        )
         print(
             f"[workflow {state.run_id}] {definition.name}: started "
             f"({len(definition.nodes)} nodes)",
@@ -555,6 +534,30 @@ def _parse_workflow_cli_inputs(definition, values: list[str]) -> dict[str, objec
             ) from exc
         supplied[name] = parsed
     return supplied
+
+
+def _workflow_progress_reporter(run_id, nodes, stderr: TextIO):
+    positions = {
+        node.id: (index, node.type)
+        for index, node in enumerate(nodes, start=1)
+    }
+
+    def report(node_id, status, elapsed_seconds, reason):
+        index, node_type = positions[node_id]
+        prefix = f"[workflow {run_id}] {index}/{len(nodes)} {node_id} ({node_type})"
+        if status is WorkflowNodeStatus.RUNNING:
+            message = f"{prefix}: started"
+        else:
+            duration = (
+                f" in {elapsed_seconds:.1f}s" if elapsed_seconds is not None else ""
+            )
+            message = f"{prefix}: {status.value}{duration}"
+            if reason and status is not WorkflowNodeStatus.SUCCEEDED:
+                concise_reason = " ".join(str(reason).split())
+                message += f" — {concise_reason[:300]}"
+        print(message, file=stderr, flush=True)
+
+    return report
 
 
 def _workflow_needs_agent(definition, definitions, seen=frozenset()) -> bool:
@@ -776,7 +779,8 @@ def _resume_workflow_run(
     name = payload["workflow"]["name"]
     if name not in definitions:
         raise ValueError(f"pinned workflow {name!r} is no longer available")
-    require_publication_isolation(definitions[name])
+    definition = definitions[name]
+    require_publication_isolation(definition)
     config = _load(workspace, stderr)
     if config is None:
         raise ValueError("could not load HAL configuration for the workflow workspace")
@@ -802,6 +806,14 @@ def _resume_workflow_run(
         git_backend=config.git_backend,
         external_intent=state.record_external_intent,
     )
+    report_progress = _workflow_progress_reporter(
+        state.run_id, definition.nodes, stderr,
+    )
+    print(
+        f"[workflow {state.run_id}] {name}: resuming ({len(definition.nodes)} nodes)",
+        file=stderr,
+        flush=True,
+    )
     lock = (
         WorkflowWorkspaceLock(repository / ".hal" / "locks", workspace, state.run_id)
         if workflow_requires_trust(definitions[name]) else nullcontext()
@@ -811,11 +823,12 @@ def _resume_workflow_run(
     ) if is_worktree else None
     with cancel_on_sigint(cancellation), lock:
         result = resume_persisted_workflow(
-            state, definitions[name], dispatcher.artifact_store, dispatcher,
+            state, definition, dispatcher.artifact_store, dispatcher,
             retry_nodes=retry_nodes,
             usage=lambda: dispatcher.ledger.usage,
             workspace_snapshot=snapshotter,
-            max_parallel=definitions[name].execution.max_parallel,
+            max_parallel=definition.execution.max_parallel,
+            on_progress=report_progress,
         )
     return {
         "run_id": state.run_id,

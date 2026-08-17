@@ -1,6 +1,7 @@
 """Explicit compatibility checks for pinned workflow definition migration."""
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import Any
 
 from .workflow_schema import WorkflowDefinition
@@ -68,7 +69,7 @@ def migrate_workflow_definition(
     }
     state.commit_migration(
         workflow, graph, tuple(node_id for node_id in new_graph if node_id not in old_graph),
-        actor.strip(), reason.strip(),
+        actor.strip(), reason.strip(), asdict(definition.execution.budgets),
     )
 
 
