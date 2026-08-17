@@ -34,6 +34,7 @@ from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
 
 
 _COLLAPSED_PASTE_CHARS = 5_120
+_LARGE_PASTE_PROMPT = "You are about to paste text that is longer than 5 KiB. Do you wish to continue?"
 
 
 class Composer(TextArea):
@@ -49,10 +50,17 @@ class Composer(TextArea):
             return
         event.stop()
         event.prevent_default()
-        # Windows Terminal commonly handles Ctrl+V itself and forwards the text as
-        # a bracketed-paste event. Treat that path exactly like action_paste so the
-        # behavior doesn't depend on which terminal or shell launched HAL.
-        self._insert_paste(event.text)
+        text = event.text
+        if len(text) >= _COLLAPSED_PASTE_CHARS:
+            def on_confirm(confirmed: bool) -> None:
+                if confirmed:
+                    self._insert_paste(text)
+            self.app.push_screen(
+                ConfirmScreen(_LARGE_PASTE_PROMPT, confirm_label="Paste anyway", deny_label="Cancel"),
+                on_confirm,
+            )
+        else:
+            self._insert_paste(text)
 
     def action_paste(self) -> None:
         """Paste from the native clipboard, retaining Textual's fallback."""
@@ -277,7 +285,6 @@ class HalTui(App[int]):
         Binding("ctrl+j", "insert_newline", "", show=False, priority=True),
         Binding("f2", "submit", "Send", priority=True),
         Binding("f3", "insert_newline", "New line", priority=True),
-        Binding("f4", "paste_clipboard", "Paste", priority=True),
         Binding("shift+enter", "insert_newline", "", show=False, priority=True),
         Binding("ctrl+c", "cancel_turn", "Cancel", priority=True),
         Binding("ctrl+shift+c", "copy_selection", "Copy selection", priority=True),
@@ -327,8 +334,7 @@ class HalTui(App[int]):
         with Vertical(id="composer-frame"):
             yield Composer(soft_wrap=True, placeholder="Ask HAL…", id="composer")
             with Horizontal(id="composer-controls"):
-                yield Static("Enter/F2 send · Ctrl+J new line · F4 paste", id="composer-hint")
-                yield Button("Paste", id="paste")
+                yield Static("Enter/F2 send · Ctrl+J new line", id="composer-hint")
                 yield Button("Newline", id="newline")
                 yield Button("Cancel", id="cancel", disabled=True)
                 yield Button("Send", id="send", variant="primary")
@@ -412,8 +418,6 @@ class HalTui(App[int]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "send":
             self.action_submit()
-        elif event.button.id == "paste":
-            self.action_paste_clipboard()
         elif event.button.id == "newline":
             self.action_insert_newline()
         elif event.button.id == "cancel":
@@ -473,12 +477,6 @@ class HalTui(App[int]):
         composer = self.query_one("#composer", TextArea)
         composer.insert("\n")
         composer.focus()
-
-    def action_paste_clipboard(self) -> None:
-        """Paste without relying on a terminal-host paste shortcut or transport."""
-        if isinstance(self.screen, ConfirmScreen):
-            return
-        self.query_one("#composer", Composer).action_paste()
 
     def _handle_command(self, text: str) -> bool:
         if text in {"/exit", "/quit"}:
