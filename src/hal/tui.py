@@ -21,6 +21,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, Footer, Static, TextArea
 
+from . import __version__
 from .agent import Agent, Event, EventKind
 from .cancellation import CancelledError, CancellationToken
 from .config import Config
@@ -366,7 +367,7 @@ class HalTui(App[int]):
         project = self.cwd.name or str(self.cwd)
         session = short_session_id(self.session.metadata.id)
         statuses.first(Static).update(
-            f"{self.config.provider}/{self.agent.model} · {project} · {self.branch} · {session}{elapsed}"
+            f"HAL v{__version__} · {self.config.provider}/{self.agent.model} · {project} · {self.branch} · {session}{elapsed}"
         )
 
     def _set_busy(self, value: bool) -> None:
