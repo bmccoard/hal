@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import Future, ThreadPoolExecutor, wait, FIRST_COMPLETED
 from contextlib import nullcontext
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 import json
 from pathlib import Path
 import time
@@ -49,7 +49,9 @@ class WorkflowNodeReceipt:
     """Sanitized result returned by a trusted node implementation."""
 
     status: WorkflowNodeStatus
-    outputs: Mapping[str, Any] = MappingProxyType({})
+    outputs: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     outcome: str | None = None
     reason: str | None = None
     approval: Mapping[str, Any] | None = None
@@ -75,7 +77,9 @@ class WorkflowNodeReceipt:
 class WorkflowNodeRecord:
     node_id: str
     status: WorkflowNodeStatus
-    outputs: Mapping[str, Any] = MappingProxyType({})
+    outputs: Mapping[str, Any] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
     outcome: str | None = None
     reason: str | None = None
     approval: Mapping[str, Any] | None = None

@@ -33,7 +33,7 @@ from .tools import BashTool
 from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
 
 
-_COLLAPSED_PASTE_CHARS = 5_120
+_COLLAPSED_PASTE_BYTES = 5 * 1_024
 
 
 class Composer(TextArea):
@@ -49,33 +49,37 @@ class Composer(TextArea):
             return
         event.stop()
         event.prevent_default()
-        # Windows Terminal commonly handles Ctrl+V itself and forwards the text as
-        # a bracketed-paste event. Treat that path exactly like action_paste so the
-        # behavior doesn't depend on which terminal or shell launched HAL.
         self._insert_paste(event.text)
-
-    def action_paste(self) -> None:
-        """Paste from the native clipboard, retaining Textual's fallback."""
-        if self.read_only:
-            return
-        try:
-            text = read_windows_unicode() if os.name == "nt" else self.app.clipboard
-        except OSError as exc:
-            self.app.notify(f"Could not read clipboard: {exc}", severity="error")
-            return
-        if text:
-            self._insert_paste(text)
 
     def _insert_paste(self, text: str) -> None:
         """Insert a small paste or a compact marker for a large payload."""
-        if len(text) < _COLLAPSED_PASTE_CHARS:
+        size = len(text.encode("utf-8"))
+        if size < _COLLAPSED_PASTE_BYTES:
             start, end = self.selection
             result = self.replace(text, start, end, maintain_selection_offset=False)
             self.move_cursor(result.end_location)
             self.focus()
             return
+
+        def receive(confirmed: bool | None) -> None:
+            if confirmed:
+                self._insert_large_paste(text, size)
+            else:
+                self.focus()
+
+        self.app.push_screen(
+            ConfirmScreen(
+                "You are about to paste text that is longer than 5 KiB. "
+                "Do you wish to continue?",
+                confirm_label="Paste",
+                deny_label="Cancel",
+            ),
+            receive,
+        )
+
+    def _insert_large_paste(self, text: str, size: int) -> None:
+        """Store a confirmed large paste and insert its compact marker."""
         self._paste_number += 1
-        size = len(text.encode("utf-8"))
         marker = f"[Pasted block {self._paste_number} · {size:,} bytes]"
         # A single replacement keeps selection/cursor behavior and avoids an
         # expensive render/document update for every pasted character.
@@ -153,45 +157,6 @@ def copy_windows_unicode(text: str) -> None:
     finally:
         if memory and not transferred:
             kernel32.GlobalFree(memory)
-        user32.CloseClipboard()
-
-
-def read_windows_unicode() -> str:
-    """Read Unicode text from the native Windows clipboard."""
-    user32 = ctypes.WinDLL("user32", use_last_error=True)
-    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    user32.OpenClipboard.argtypes = [wintypes.HWND]
-    user32.OpenClipboard.restype = wintypes.BOOL
-    user32.IsClipboardFormatAvailable.argtypes = [wintypes.UINT]
-    user32.IsClipboardFormatAvailable.restype = wintypes.BOOL
-    user32.GetClipboardData.argtypes = [wintypes.UINT]
-    user32.GetClipboardData.restype = ctypes.c_void_p
-    user32.CloseClipboard.argtypes = []
-    user32.CloseClipboard.restype = wintypes.BOOL
-    kernel32.GlobalLock.argtypes = [ctypes.c_void_p]
-    kernel32.GlobalLock.restype = ctypes.c_void_p
-    kernel32.GlobalUnlock.argtypes = [ctypes.c_void_p]
-    kernel32.GlobalUnlock.restype = wintypes.BOOL
-    kernel32.GlobalSize.argtypes = [ctypes.c_void_p]
-    kernel32.GlobalSize.restype = ctypes.c_size_t
-
-    if not user32.IsClipboardFormatAvailable(13):  # CF_UNICODETEXT
-        return ""
-    if not user32.OpenClipboard(None):
-        raise ctypes.WinError(ctypes.get_last_error())
-    try:
-        memory = user32.GetClipboardData(13)
-        if not memory:
-            raise ctypes.WinError(ctypes.get_last_error())
-        size = kernel32.GlobalSize(memory)
-        source = kernel32.GlobalLock(memory)
-        if not source:
-            raise ctypes.WinError(ctypes.get_last_error())
-        try:
-            return ctypes.string_at(source, size).decode("utf-16-le").rstrip("\0")
-        finally:
-            kernel32.GlobalUnlock(memory)
-    finally:
         user32.CloseClipboard()
 
 
@@ -277,7 +242,6 @@ class HalTui(App[int]):
         Binding("ctrl+j", "insert_newline", "", show=False, priority=True),
         Binding("f2", "submit", "Send", priority=True),
         Binding("f3", "insert_newline", "New line", priority=True),
-        Binding("f4", "paste_clipboard", "Paste", priority=True),
         Binding("shift+enter", "insert_newline", "", show=False, priority=True),
         Binding("ctrl+c", "cancel_turn", "Cancel", priority=True),
         Binding("ctrl+shift+c", "copy_selection", "Copy selection", priority=True),
@@ -327,8 +291,7 @@ class HalTui(App[int]):
         with Vertical(id="composer-frame"):
             yield Composer(soft_wrap=True, placeholder="Ask HAL…", id="composer")
             with Horizontal(id="composer-controls"):
-                yield Static("Enter/F2 send · Ctrl+J new line · F4 paste", id="composer-hint")
-                yield Button("Paste", id="paste")
+                yield Static("Enter/F2 send · Ctrl+J new line", id="composer-hint")
                 yield Button("Newline", id="newline")
                 yield Button("Cancel", id="cancel", disabled=True)
                 yield Button("Send", id="send", variant="primary")
@@ -394,12 +357,15 @@ class HalTui(App[int]):
         self.commentary_widget = None
 
     def _update_status(self) -> None:
+        statuses = self.query("#status")
+        if not statuses:
+            return
         elapsed = ""
         if self.busy:
             elapsed = f" · working {time.monotonic() - self.turn_started:.1f}s"
         project = self.cwd.name or str(self.cwd)
         session = short_session_id(self.session.metadata.id)
-        self.query_one("#status", Static).update(
+        statuses.first(Static).update(
             f"{self.config.provider}/{self.agent.model} · {project} · {self.branch} · {session}{elapsed}"
         )
 
@@ -412,8 +378,6 @@ class HalTui(App[int]):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "send":
             self.action_submit()
-        elif event.button.id == "paste":
-            self.action_paste_clipboard()
         elif event.button.id == "newline":
             self.action_insert_newline()
         elif event.button.id == "cancel":
@@ -473,12 +437,6 @@ class HalTui(App[int]):
         composer = self.query_one("#composer", TextArea)
         composer.insert("\n")
         composer.focus()
-
-    def action_paste_clipboard(self) -> None:
-        """Paste without relying on a terminal-host paste shortcut or transport."""
-        if isinstance(self.screen, ConfirmScreen):
-            return
-        self.query_one("#composer", Composer).action_paste()
 
     def _handle_command(self, text: str) -> bool:
         if text in {"/exit", "/quit"}:
