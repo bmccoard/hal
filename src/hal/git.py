@@ -336,11 +336,14 @@ class DulwichGitBackend:
             value = porcelain.status(repo, untracked_files="all")
             try:
                 branch = _decode(porcelain.active_branch(repo))
+            except IndexError:
+                # Dulwich throws IndexError if the repo is empty (no commits yet)
+                branch = "main"
             except (KeyError, ValueError):
                 branch = "(detached)"
         cancellation.raise_if_cancelled()
         staged = [item for group in value.staged.values() for item in group]
-        return GitStatus(branch, _paths(staged), _paths(value.unstaged), _paths(value.untracked))
+        return GitStatus(branch, _paths(staged), _paths(value.unstaged), _paths(value.untracked))ed))
 
     def stage(self, paths: list[str],
               cancellation: CancellationToken | None = None) -> None:
