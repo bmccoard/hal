@@ -344,6 +344,56 @@ class GitCheckoutTool:
         return json.dumps({"backend": self.backend.name, "branch": branch, "created": create})
 
 
+class GitRestoreTool:
+    parallel_safe = False
+    effect = ToolEffect.MUTATING
+
+    def __init__(self, backend: GitBackend) -> None:
+        self.backend = backend
+
+    @property
+    def spec(self) -> ToolSpec:
+        return ToolSpec(
+            "git_restore",
+            "Restore only explicitly listed tracked working-tree files from HEAD or another commit/ref without switching branches or changing the staging area. Use this to discard local changes to individual files.",
+            {
+                "type": "object",
+                "properties": {
+                    "paths": {
+                        "type": "array", "items": {"type": "string"},
+                        "minItems": 1,
+                    },
+                    "source": {
+                        "type": "string",
+                        "description": "Commit/ref to restore from; defaults to HEAD.",
+                    },
+                },
+                "required": ["paths"],
+            },
+        )
+
+    def run(self, arguments: dict[str, Any],
+            cancellation: CancellationToken | None = None) -> str:
+        paths = normalize_paths(self.backend.root, arguments.get("paths"))
+        _reject_sensitive(paths, "restore")
+        source = arguments.get("source", "HEAD")
+        if not isinstance(source, str) or not source.strip():
+            raise ValueError("source must be a non-empty string")
+        source = source.strip()
+        if source.startswith("-"):
+            raise ValueError("source must not begin with '-'")
+        if any(character in source for character in {"\0", "\r", "\n"}):
+            raise ValueError("source must not contain control characters")
+        self.backend.restore(source, paths, cancellation)
+        return json.dumps({
+            "backend": self.backend.name,
+            "source": source,
+            "paths": paths,
+            "worktree_restored": True,
+            "staging_area_changed": False,
+        })
+
+
 class GitShowTool:
     parallel_safe = True
     effect = ToolEffect.READ_ONLY
@@ -391,5 +441,5 @@ def git_tools(root: Path, preference: str = "auto") -> list[object]:
         GitInitTool(backend), GitStageTool(backend), GitUnstageTool(backend),
         GitStatusTool(backend), GitDiffTool(backend), GitLogTool(backend),
         GitCommitTool(backend), GitPushTool(backend),
-        GitCheckoutTool(backend), GitShowTool(backend),
+        GitCheckoutTool(backend), GitRestoreTool(backend), GitShowTool(backend),
     ]

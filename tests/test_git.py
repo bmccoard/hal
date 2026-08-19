@@ -20,6 +20,7 @@ from hal.git_tools import (
     GitInitTool,
     GitLogTool,
     GitPushTool,
+    GitRestoreTool,
     GitShowTool,
     GitStageTool,
     GitUnstageTool,
@@ -330,6 +331,78 @@ def test_checkout_tool_rejects_invalid_target(tmp_path: Path) -> None:
         GitCheckoutTool(backend).run({"target": "br\nanch"})
     with pytest.raises(ValueError, match="non-empty"):
         GitCheckoutTool(backend).run({"target": "  "})
+
+
+@pytest.mark.parametrize("backend_kind", ["dulwich", "native"])
+def test_restore_tool_restores_one_file_and_preserves_other_changes(
+    tmp_path: Path, backend_kind: str,
+) -> None:
+    executable = shutil.which("git")
+    if backend_kind == "native" and not executable:
+        pytest.skip("native Git is unavailable")
+    root = new_repo(tmp_path)
+    backend = (
+        NativeGitBackend(root, executable) if backend_kind == "native"
+        else DulwichGitBackend(root)
+    )
+    first = root / "first.txt"
+    second = root / "second.txt"
+    first.write_text("original first\n", encoding="utf-8")
+    second.write_text("original second\n", encoding="utf-8")
+    backend.commit("Add files", ["first.txt", "second.txt"])
+    first.write_text("changed first\n", encoding="utf-8")
+    second.write_text("changed second\n", encoding="utf-8")
+
+    result = json.loads(GitRestoreTool(backend).run({"paths": ["first.txt"]}))
+
+    assert first.read_text(encoding="utf-8") == "original first\n"
+    assert second.read_text(encoding="utf-8") == "changed second\n"
+    assert result == {
+        "backend": backend.name,
+        "source": "HEAD",
+        "paths": ["first.txt"],
+        "worktree_restored": True,
+        "staging_area_changed": False,
+    }
+
+
+@pytest.mark.parametrize("backend_kind", ["dulwich", "native"])
+def test_restore_tool_preserves_staged_content(
+    tmp_path: Path, backend_kind: str,
+) -> None:
+    executable = shutil.which("git")
+    if backend_kind == "native" and not executable:
+        pytest.skip("native Git is unavailable")
+    root = new_repo(tmp_path)
+    backend = (
+        NativeGitBackend(root, executable) if backend_kind == "native"
+        else DulwichGitBackend(root)
+    )
+    path = root / "file.txt"
+    path.write_text("original\n", encoding="utf-8")
+    backend.commit("Add file", ["file.txt"])
+    path.write_text("staged\n", encoding="utf-8")
+    backend.stage(["file.txt"])
+    path.write_text("unstaged\n", encoding="utf-8")
+
+    GitRestoreTool(backend).run({"paths": ["file.txt"]})
+
+    assert path.read_text(encoding="utf-8") == "original\n"
+    assert backend.status().staged == ["file.txt"]
+
+
+def test_restore_tool_rejects_unsafe_paths_and_sources(tmp_path: Path) -> None:
+    backend = DulwichGitBackend(new_repo(tmp_path))
+    tool = GitRestoreTool(backend)
+
+    with pytest.raises(ValueError, match="credentials"):
+        tool.run({"paths": [".env"]})
+    with pytest.raises(ValueError, match="escapes repository"):
+        tool.run({"paths": ["../outside.txt"]})
+    with pytest.raises(ValueError, match="must not begin"):
+        tool.run({"paths": ["file.txt"], "source": "--bad"})
+    with pytest.raises(ValueError, match="control characters"):
+        tool.run({"paths": ["file.txt"], "source": "HEAD\nother"})
 
 
 def test_dulwich_show_displays_commit(tmp_path: Path) -> None:

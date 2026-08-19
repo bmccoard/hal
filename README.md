@@ -414,7 +414,7 @@ exceeds the limit rather than making commit-safety decisions from truncated data
   `read_file`, `write_file`, `edit_file`, `pdf_read`, `pdf_write`, `pdf_form_write`,
   `docx_read`, `docx_write`, `grep`, `glob`, `git_init`,
   `git_stage`, `git_unstage`, `git_status`, `git_diff`, `git_log`, `git_commit`,
-  and `git_push`.
+  `git_push`, `git_checkout`, `git_restore`, and `git_show`.
 - **Tool extensions** are separately installed Python packages that add tools
   through the `hal.tools` entry-point group. HAL loads only extensions explicitly
   enabled by name in `hal.yaml`.

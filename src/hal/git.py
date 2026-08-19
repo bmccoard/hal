@@ -76,6 +76,8 @@ class GitBackend(Protocol):
              cancellation: CancellationToken | None = None) -> str: ...
     def checkout(self, target: str, create: bool = False,
                  cancellation: CancellationToken | None = None) -> str: ...
+    def restore(self, source: str, paths: list[str],
+                cancellation: CancellationToken | None = None) -> None: ...
     def show(self, ref: str, path: str | None = None,
              cancellation: CancellationToken | None = None) -> str: ...
 
@@ -259,6 +261,15 @@ class NativeGitBackend:
         arguments.append(target)
         self._run(arguments, cancellation)
         return self.status(cancellation).branch
+
+    def restore(self, source: str, paths: list[str],
+                cancellation: CancellationToken | None = None) -> None:
+        """Restore explicit working-tree paths without changing the index."""
+        self._require_repository(cancellation)
+        self._run(
+            ["restore", "--source", source, "--worktree", "--", *paths],
+            cancellation,
+        )
 
     def show(self, ref: str, path: str | None = None,
              cancellation: CancellationToken | None = None) -> str:
@@ -492,6 +503,25 @@ class DulwichGitBackend:
                 raise GitError(f"could not checkout '{target}': {exc}") from exc
         cancellation.raise_if_cancelled()
         return self.status(cancellation).branch
+
+    def restore(self, source: str, paths: list[str],
+                cancellation: CancellationToken | None = None) -> None:
+        """Restore explicit working-tree paths without changing the index."""
+        cancellation = cancellation_or_default(cancellation)
+        cancellation.raise_if_cancelled()
+        try:
+            with self._repo() as repo:
+                porcelain.restore(
+                    repo, paths=paths, source=source,
+                    staged=False, worktree=True,
+                )
+        except CancelledError:
+            raise
+        except Exception as exc:
+            raise GitError(
+                f"could not restore paths from {source!r}: {exc}"
+            ) from exc
+        cancellation.raise_if_cancelled()
 
     def show(self, ref: str, path: str | None = None,
              cancellation: CancellationToken | None = None) -> str:
