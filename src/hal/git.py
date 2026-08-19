@@ -343,7 +343,7 @@ class DulwichGitBackend:
                 branch = "(detached)"
         cancellation.raise_if_cancelled()
         staged = [item for group in value.staged.values() for item in group]
-        return GitStatus(branch, _paths(staged), _paths(value.unstaged), _paths(value.untracked))ed))
+        return GitStatus(branch, _paths(staged), _paths(value.unstaged), _paths(value.untracked))
 
     def stage(self, paths: list[str],
               cancellation: CancellationToken | None = None) -> None:

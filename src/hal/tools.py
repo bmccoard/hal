@@ -20,6 +20,10 @@ from .models import ToolSpec
 from .process import BoundedOutput, DEFAULT_OUTPUT_LIMIT, ProcessTimeout, run_bounded_process
 
 MAX_RESULT = DEFAULT_OUTPUT_LIMIT
+PATH_WRITE_TOOLS = {
+    "write_file", "edit_file", "pdf_write", "pdf_form_write", "docx_write",
+}
+REPLACE_FILE_TOOLS = {"write_file", "pdf_write", "pdf_form_write", "docx_write"}
 DEFAULT_IGNORED_DIRECTORIES = {
     ".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv",
     "__pycache__", "node_modules", "venv",
@@ -530,7 +534,7 @@ class Registry:
                 )
             ):
                 raise PermissionError("bash was denied by bash_policy")
-        if name in {"write_file", "edit_file"}:
+        if name in PATH_WRITE_TOOLS:
             raw_path = arguments.get("path")
             if isinstance(raw_path, str) and raw_path:
                 path = Path(raw_path)
@@ -549,10 +553,10 @@ class Registry:
                             raise PermissionError(
                                 f"{name} outside workspace was denied: {resolved}"
                             )
-                if name == "write_file" and protect_existing_files and resolved.exists():
+                if name in REPLACE_FILE_TOOLS and protect_existing_files and resolved.exists():
+                    hint = "; use edit_file for an exact replacement" if name == "write_file" else ""
                     raise PermissionError(
-                        f"write_file cannot replace existing file {resolved} in a workflow; "
-                        "use edit_file for an exact replacement"
+                        f"{name} cannot replace existing file {resolved} in a workflow{hint}"
                     )
         target = str(arguments.get("command", "")) if name == "bash" else name
         needs_approval = any(target == rule or (name == "bash" and target.startswith(rule) and (len(target) == len(rule) or target[len(rule)].isspace())) for rule in self.approvals)
@@ -569,10 +573,15 @@ def default_registry(cwd: Path, root: Path | None = None, approvals: list[str] |
                      git_backend: str = "auto", only_write_locally: bool = False,
                      bash_policy: str = "normal") -> Registry:
     root = (root or workspace_root(cwd)).resolve()
+    from .document_tools import (
+        DocxReadTool, DocxWriteTool, PdfFormWriteTool, PdfReadTool, PdfWriteTool,
+    )
     from .git_tools import git_tools
 
     return Registry([
         BashTool(cwd), ReadFileTool(), WriteFileTool(), EditFileTool(),
+        PdfReadTool(), PdfWriteTool(), PdfFormWriteTool(),
+        DocxReadTool(), DocxWriteTool(),
         GrepTool(root), GlobTool(root), *git_tools(root, git_backend),
     ], approvals, confirm, root if only_write_locally else None, cwd, bash_policy)
 

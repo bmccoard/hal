@@ -62,7 +62,9 @@ def test_builtin_capabilities_have_expected_mutation_boundaries() -> None:
 
     assert inspect is BUILTIN_CAPABILITIES["inspect"]
     assert "read_file" in inspect.allowed_tools
+    assert {"pdf_read", "docx_read"} <= inspect.allowed_tools
     assert "write_file" not in inspect.allowed_tools
+    assert {"pdf_write", "pdf_form_write", "docx_write"}.isdisjoint(inspect.allowed_tools)
     assert "git_push" in change.denied_tools
     assert change.protect_existing_files is True
 

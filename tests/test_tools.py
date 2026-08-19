@@ -237,6 +237,15 @@ def test_default_registry_exposes_structured_git_tools(tmp_path: Path) -> None:
     } <= names
 
 
+def test_default_registry_exposes_document_tools(tmp_path: Path) -> None:
+    registry = default_registry(tmp_path, tmp_path, git_backend="dulwich")
+    names = {spec.name for spec in registry.specs}
+
+    assert {"pdf_read", "pdf_write", "pdf_form_write", "docx_read", "docx_write"} <= names
+    assert registry.metadata("pdf_read")["effect"] == "read_only"
+    assert registry.metadata("docx_write")["effect"] == "mutating"
+
+
 def test_registry_can_be_extended_but_rejects_name_collisions() -> None:
     registry = Registry([NamedTool("one")])
     registry.extend([NamedTool("two")])

@@ -59,4 +59,4 @@ __all__ = [
     "load_config",
     "resolve_capability",
 ]
-__version__ = "0.2"
+__version__ = "0.3"

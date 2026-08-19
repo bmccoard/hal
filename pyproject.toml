@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "hal-agent-cli"
-version = "0.2"
+version = "0.3"
 description = "HAL, a local provider-neutral coding-agent CLI"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -23,6 +23,11 @@ tui = [
 ]
 git = [
   "dulwich>=0.24,<0.26",
+]
+documents = [
+  "pypdf>=5,<7",
+  "python-docx>=1.1,<2",
+  "reportlab>=4,<5",
 ]
 dev = [
   "pytest>=8.0",

@@ -10,8 +10,8 @@ from .verification import VerificationCheck, VerificationResult
 
 
 READ_ONLY_TOOLS = frozenset({
-    "glob", "grep", "read_file", "git_status", "git_diff", "git_log",
-    "git_show",
+    "glob", "grep", "read_file", "pdf_read", "docx_read", "git_status",
+    "git_diff", "git_log", "git_show",
 })
 DANGEROUS_GIT_TOOLS = frozenset({
     "git_init", "git_stage", "git_unstage", "git_commit", "git_push",

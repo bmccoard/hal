@@ -381,6 +381,17 @@ TUI dependencies were split, use `python -m pip install -e ".[tui]"`. If
 `rich` or `textual` is missing, automatic interactive mode warns and falls back to
 the basic REPL; explicit `hal tui` reports the missing packages and exits.
 
+The built-in `pdf_read`, `pdf_write`, `pdf_form_write`, `docx_read`, and `docx_write` tools load
+their format libraries only when used. Install them with
+`python -m pip install -e ".[documents]"`; this extra uses `pypdf`, `reportlab`,
+and `python-docx`.
+
+Use `pdf_write` for flowing text documents and `pdf_form_write` for positioned,
+fillable AcroForms. Form pages accept positioned labels plus text, multiline,
+checkbox, choice, and signature fields. A signature field is intentionally blank
+so a person can sign it later in Adobe Acrobat; HAL does not handle certificates,
+private keys, or cryptographic document signing.
+
 `hal run --timeout <duration>` applies one wall-clock deadline to the provider
 calls, retry waits, agent loop, and tool calls. When a shell command is active,
 HAL terminates its process tree before returning the timeout error. Durations
@@ -400,7 +411,8 @@ exceeds the limit rather than making commit-safety decisions from truncated data
 - **Interactive commands** are entered at the `HAL>` prompt, such as `/help`,
   `/sessions`, `/resume`, `/clear`, `/model`, and `/exit`.
 - **Tools** are executable capabilities available to the model: `bash`,
-  `read_file`, `write_file`, `edit_file`, `grep`, `glob`, `git_init`,
+  `read_file`, `write_file`, `edit_file`, `pdf_read`, `pdf_write`, `pdf_form_write`,
+  `docx_read`, `docx_write`, `grep`, `glob`, `git_init`,
   `git_stage`, `git_unstage`, `git_status`, `git_diff`, `git_log`, `git_commit`,
   and `git_push`.
 - **Tool extensions** are separately installed Python packages that add tools
