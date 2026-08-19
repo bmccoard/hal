@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import ctypes
 from pathlib import Path
 
 from textual import events
@@ -58,7 +59,7 @@ def _app(tmp_path: Path) -> tuple[HalTui, FakeAgent]:
     return app, agent
 
 
-def test_tui_layout_uses_updated_copy_and_has_no_paste_button(tmp_path: Path) -> None:
+def test_tui_layout_has_paste_button_next_to_newline(tmp_path: Path) -> None:
     app, _agent = _app(tmp_path)
 
     async def scenario() -> None:
@@ -67,15 +68,83 @@ def test_tui_layout_uses_updated_copy_and_has_no_paste_button(tmp_path: Path) ->
             composer = app.query_one("#composer", Composer)
             assert composer.placeholder == "Ask HAL…"
             assert str(app.query_one("#composer-hint").render()) == (
-                "Enter/F2 send · Ctrl+J new line"
+                "Enter/F2 send · Ctrl+J new line · F4 paste"
             )
-            assert len(app.query("#paste")) == 0
+            assert app.query_one("#paste", Button).label.plain == "Paste"
             assert app.query_one("#newline", Button).label.plain == "Newline"
+            buttons = list(app.query("#composer-controls Button"))
+            assert buttons.index(app.query_one("#paste")) + 1 == buttons.index(
+                app.query_one("#newline")
+            )
             footer = app.query_one(Footer)
             controls = app.query_one("#composer-controls")
             assert controls.region.bottom <= footer.region.y
 
     asyncio.run(scenario())
+
+
+def test_paste_button_reads_native_windows_clipboard(monkeypatch, tmp_path: Path) -> None:
+    app, agent = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            monkeypatch.setattr("hal.tui.os.name", "nt")
+            monkeypatch.setattr(
+                "hal.tui.read_windows_unicode", lambda: "clipboard ✓",
+            )
+            await pilot.click("#paste")
+
+            assert app.query_one("#composer", Composer).text == "clipboard ✓"
+            assert agent.prompts == []
+
+    asyncio.run(scenario())
+
+
+def test_f4_reads_native_windows_clipboard(monkeypatch, tmp_path: Path) -> None:
+    app, _agent = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            monkeypatch.setattr("hal.tui.os.name", "nt")
+            monkeypatch.setattr("hal.tui.read_windows_unicode", lambda: "via F4")
+            await pilot.press("f4")
+
+            assert app.query_one("#composer", Composer).text == "via F4"
+
+    asyncio.run(scenario())
+
+
+def test_windows_clipboard_reader_preserves_unicode(monkeypatch) -> None:
+    from hal.tui import read_windows_unicode
+
+    encoded = "pasted → data ✓\0".encode("utf-16-le")
+    memory = ctypes.create_string_buffer(encoded)
+
+    class Function:
+        def __init__(self, callback):
+            object.__setattr__(self, "callback", callback)
+
+        def __call__(self, *args):
+            return self.callback(*args)
+
+    class User32:
+        IsClipboardFormatAvailable = Function(lambda _format_id: 1)
+        OpenClipboard = Function(lambda _owner: 1)
+        GetClipboardData = Function(lambda _format_id: memory)
+        CloseClipboard = Function(lambda: 1)
+
+    class Kernel32:
+        GlobalSize = Function(lambda _memory: len(encoded))
+        GlobalLock = Function(lambda value: ctypes.addressof(value))
+        GlobalUnlock = Function(lambda _memory: 1)
+
+    libraries = iter([User32(), Kernel32()])
+    monkeypatch.setattr(
+        "hal.tui.ctypes.WinDLL", lambda *_args, **_kwargs: next(libraries),
+        raising=False,
+    )
+
+    assert read_windows_unicode() == "pasted → data ✓"
 
 
 def test_small_paste_stays_editable_in_composer(tmp_path: Path) -> None:
