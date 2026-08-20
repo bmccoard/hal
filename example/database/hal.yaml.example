@@ -1,0 +1,22 @@
+extensions:
+  - database
+
+extension_config:
+  database:
+    max_rows: 200
+    timeout_ms: 5000
+    connections:
+      work:
+        driver: sqlite
+        path: ./work.db
+        read_only: true
+        # sqlite_extensions:
+        #   - /approved/extensions/vec0.so
+
+harness:
+  default_capability: database-read
+  capabilities:
+    database-read:
+      description: Inspect configured SQLite databases without changing them
+      allowed_tools: [db_schema, db_query, db_explain]
+      denied_tools: [bash]

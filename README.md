@@ -504,6 +504,13 @@ python new-project.py my-extension
 This copies `example/simple` to `../my-extension`, specializes its distribution,
 entry-point, package, and tool names, and refuses to overwrite an existing path.
 
+The repository also includes [`example/database`](example/database) as a practical
+SQLite extension. It exposes schema inspection, read-only parameterized queries,
+and query plans through named, configuration-controlled connections. It uses
+SQLite's read-only URI mode, query-only setting, authorizer, time limit, and row
+limit, and can load a trusted `sqlite_vec` native extension before model-generated
+SQL is authorized. Install it separately and follow its README for configuration.
+
 The tool retains the provider-facing name `bash` for compatibility, but selects
 the native shell explicitly. On Windows it uses `pwsh`, then Windows PowerShell,
 and falls back to `cmd.exe` only when neither is available. On Unix-like systems
