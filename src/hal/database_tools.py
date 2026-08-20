@@ -1,4 +1,4 @@
-"""Safe, bounded SQLite inspection tools for HAL."""
+"""Safe, bounded SQLite inspection tools built into HAL."""
 from __future__ import annotations
 
 import json
@@ -10,10 +10,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from hal.cancellation import CancellationToken, cancellation_or_default
-from hal.extensions import ExtensionContext
-from hal.models import ToolSpec
-from hal.tools import Tool, ToolEffect
+from .cancellation import CancellationToken, cancellation_or_default
+from .models import ToolSpec
+from .tools import Tool, ToolEffect
 
 
 _DENIED_ACTIONS = frozenset(
@@ -51,8 +50,7 @@ def _positive_int(value: Any, path: str, default: int, maximum: int) -> int:
     return value
 
 
-def _connections(context: ExtensionContext) -> dict[str, SQLiteConnection]:
-    settings = context.settings
+def _connections(settings: dict[str, Any], cwd: Path) -> dict[str, SQLiteConnection]:
     unknown = set(settings) - {"connections", "max_rows", "timeout_ms"}
     if unknown:
         raise ValueError(f"unknown database setting(s): {', '.join(sorted(unknown))}")
@@ -60,7 +58,9 @@ def _connections(context: ExtensionContext) -> dict[str, SQLiteConnection]:
     if not isinstance(raw_connections, dict) or not raw_connections:
         raise ValueError("database.connections must be a non-empty mapping")
     default_rows = _positive_int(settings.get("max_rows"), "database.max_rows", 200, 10_000)
-    default_timeout = _positive_int(settings.get("timeout_ms"), "database.timeout_ms", 5_000, 300_000)
+    default_timeout = _positive_int(
+        settings.get("timeout_ms"), "database.timeout_ms", 5_000, 300_000,
+    )
     parsed: dict[str, SQLiteConnection] = {}
     for raw_name, raw in raw_connections.items():
         name = str(raw_name).strip()
@@ -83,7 +83,7 @@ def _connections(context: ExtensionContext) -> dict[str, SQLiteConnection]:
             raise ValueError(f"database connection {name!r}: path must be a non-empty string")
         path = Path(raw_path).expanduser()
         if not path.is_absolute():
-            path = context.cwd / path
+            path = cwd / path
         path = path.resolve()
         if not path.is_file():
             raise ValueError(f"database connection {name!r}: file does not exist: {path}")
@@ -98,7 +98,7 @@ def _connections(context: ExtensionContext) -> dict[str, SQLiteConnection]:
         for item in raw_extensions:
             extension = Path(item).expanduser()
             if not extension.is_absolute():
-                extension = context.cwd / extension
+                extension = cwd / extension
             extension = extension.resolve()
             if not extension.is_file():
                 raise ValueError(
@@ -107,8 +107,14 @@ def _connections(context: ExtensionContext) -> dict[str, SQLiteConnection]:
             extensions.append(extension)
         parsed[name] = SQLiteConnection(
             name, path, tuple(extensions),
-            _positive_int(raw.get("max_rows"), f"database.connections.{name}.max_rows", default_rows, 10_000),
-            _positive_int(raw.get("timeout_ms"), f"database.connections.{name}.timeout_ms", default_timeout, 300_000),
+            _positive_int(
+                raw.get("max_rows"), f"database.connections.{name}.max_rows",
+                default_rows, 10_000,
+            ),
+            _positive_int(
+                raw.get("timeout_ms"), f"database.connections.{name}.timeout_ms",
+                default_timeout, 300_000,
+            ),
         )
     return parsed
 
@@ -155,11 +161,13 @@ class SQLiteTools:
                     return 1
                 return int(time.monotonic() >= deadline)
 
-            def authorize(action: int, _one: str | None, _two: str | None,
-                          _database: str | None, _trigger: str | None) -> int:
+            def authorize(
+                action: int, one: str | None, _two: str | None,
+                _database: str | None, _trigger: str | None,
+            ) -> int:
                 if (
                     schema_access and action == getattr(sqlite3, "SQLITE_PRAGMA", -1)
-                    and _one in {"table_info", "index_list"}
+                    and one in {"table_info", "index_list"}
                 ):
                     return sqlite3.SQLITE_OK
                 return sqlite3.SQLITE_DENY if action in _DENIED_ACTIONS else sqlite3.SQLITE_OK
@@ -189,13 +197,19 @@ class SchemaTool(Tool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("db_schema", "Inspect tables, views, columns, and indexes in a configured read-only SQLite database.", {
-            "type": "object",
-            "properties": {"connection": _connection_property(self.backend.connections)},
-            "required": ["connection"],
-        })
+        return ToolSpec(
+            "db_schema",
+            "Inspect tables, views, columns, and indexes in a configured read-only SQLite database.",
+            {
+                "type": "object",
+                "properties": {"connection": _connection_property(self.backend.connections)},
+                "required": ["connection"],
+            },
+        )
 
-    def run(self, arguments: dict[str, Any], cancellation: CancellationToken | None = None) -> str:
+    def run(
+        self, arguments: dict[str, Any], cancellation: CancellationToken | None = None,
+    ) -> str:
         config = self.backend.selected(arguments)
         with closing(self.backend.connect(config, cancellation, schema_access=True)) as connection:
             objects = connection.execute(
@@ -210,10 +224,14 @@ class SchemaTool(Tool):
                     for row in connection.execute("SELECT * FROM pragma_table_info(?)", (name,))
                 ]
                 indexes = [
-                    {"name": row[1], "unique": bool(row[2]), "origin": row[3], "partial": bool(row[4])}
+                    {"name": row[1], "unique": bool(row[2]), "origin": row[3],
+                     "partial": bool(row[4])}
                     for row in connection.execute("SELECT * FROM pragma_index_list(?)", (name,))
                 ]
-                result.append({"name": name, "type": kind, "columns": columns, "indexes": indexes, "sql": sql})
+                result.append({
+                    "name": name, "type": kind, "columns": columns,
+                    "indexes": indexes, "sql": sql,
+                })
             return json.dumps({"connection": config.name, "objects": result}, default=str)
 
 
@@ -226,17 +244,26 @@ class QueryTool(Tool):
 
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("db_query", "Run one read-only SQLite query with optional bound parameters. Results are row- and size-bounded.", {
-            "type": "object",
-            "properties": {
-                "connection": _connection_property(self.backend.connections),
-                "sql": {"type": "string", "description": "One SQLite read-only SQL statement."},
-                "parameters": {"description": "Named object or positional array of JSON scalar bind values.", "oneOf": [{"type": "object"}, {"type": "array"}]},
+        return ToolSpec(
+            "db_query",
+            "Run one read-only SQLite query with optional bound parameters. Results are row- and size-bounded.",
+            {
+                "type": "object",
+                "properties": {
+                    "connection": _connection_property(self.backend.connections),
+                    "sql": {"type": "string", "description": "One SQLite read-only SQL statement."},
+                    "parameters": {
+                        "description": "Named object or positional array of JSON scalar bind values.",
+                        "oneOf": [{"type": "object"}, {"type": "array"}],
+                    },
+                },
+                "required": ["connection", "sql"],
             },
-            "required": ["connection", "sql"],
-        })
+        )
 
-    def run(self, arguments: dict[str, Any], cancellation: CancellationToken | None = None) -> str:
+    def run(
+        self, arguments: dict[str, Any], cancellation: CancellationToken | None = None,
+    ) -> str:
         config = self.backend.selected(arguments)
         sql = arguments.get("sql")
         if not isinstance(sql, str) or not sql.strip():
@@ -261,17 +288,26 @@ class QueryTool(Tool):
 class ExplainTool(QueryTool):
     @property
     def spec(self) -> ToolSpec:
-        return ToolSpec("db_explain", "Show SQLite's query plan for one read-only query without returning its data.", {
-            "type": "object",
-            "properties": {
-                "connection": _connection_property(self.backend.connections),
-                "sql": {"type": "string", "description": "One SQLite read-only SQL query."},
-                "parameters": {"description": "Named object or positional array of JSON scalar bind values.", "oneOf": [{"type": "object"}, {"type": "array"}]},
+        return ToolSpec(
+            "db_explain",
+            "Show SQLite's query plan for one read-only query without returning its data.",
+            {
+                "type": "object",
+                "properties": {
+                    "connection": _connection_property(self.backend.connections),
+                    "sql": {"type": "string", "description": "One SQLite read-only SQL query."},
+                    "parameters": {
+                        "description": "Named object or positional array of JSON scalar bind values.",
+                        "oneOf": [{"type": "object"}, {"type": "array"}],
+                    },
+                },
+                "required": ["connection", "sql"],
             },
-            "required": ["connection", "sql"],
-        })
+        )
 
-    def run(self, arguments: dict[str, Any], cancellation: CancellationToken | None = None) -> str:
+    def run(
+        self, arguments: dict[str, Any], cancellation: CancellationToken | None = None,
+    ) -> str:
         updated = dict(arguments)
         sql = updated.get("sql")
         if not isinstance(sql, str) or not sql.strip():
@@ -280,6 +316,7 @@ class ExplainTool(QueryTool):
         return super().run(updated, cancellation)
 
 
-def create_tools(context: ExtensionContext) -> list[Tool]:
-    backend = SQLiteTools(_connections(context))
+def database_tools(settings: dict[str, Any], cwd: Path) -> list[Tool]:
+    """Build the database tools for trusted, configured SQLite connections."""
+    backend = SQLiteTools(_connections(settings, cwd.resolve()))
     return [SchemaTool(backend), QueryTool(backend), ExplainTool(backend)]

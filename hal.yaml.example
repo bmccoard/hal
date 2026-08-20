@@ -28,6 +28,17 @@ git:
 only_write_locally: true
 bash_policy: normal
 
+# Optional built-in read-only SQLite tools. Configuring at least one connection
+# enables db_schema, db_query, and db_explain; no extension install is required.
+# database:
+#   max_rows: 200
+#   timeout_ms: 5000
+#   connections:
+#     work:
+#       path: data/work.db
+#       # sqlite_extensions:
+#       #   - extensions/vec0.dll  # Trusted native code only.
+
 # Optional interactive confirmations. These are user-interface friction, not a
 # security boundary, and literal prefixes do not detect every indirect command.
 # tool_approvals:

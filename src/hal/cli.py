@@ -190,6 +190,9 @@ def _make_registry(
     )
     if config.subagents:
         registry.extend([DelegateTool(config.subagents)])
+    if config.database:
+        from .database_tools import database_tools
+        registry.extend(database_tools(config.database, cwd))
     load_extensions(registry, config.extensions, cwd, root, config.extension_config)
     registry_tools = {spec.name for spec in registry.specs}
     for capability in config.capabilities.values():

@@ -54,6 +54,7 @@ class Config:
     bash_policy: str = "normal"
     extensions: list[str] = field(default_factory=list)
     extension_config: dict[str, dict[str, Any]] = field(default_factory=dict)
+    database: dict[str, Any] = field(default_factory=dict)
     context_window_tokens: int = 200_000
     agents_file: bool = True
     skills: bool = True
@@ -181,6 +182,8 @@ class Config:
                 raise ValueError("extension_config keys must be non-empty strings")
             if not isinstance(settings, dict):
                 raise ValueError(f"extension_config.{name} must be a mapping")
+        if not isinstance(self.database, dict):
+            raise ValueError("database must be a mapping or null")
 
     def active_profile(self) -> ProviderProfile | None:
         return self.providers.get(self.provider)
@@ -392,6 +395,11 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         extension_config = {}
     if not isinstance(extension_config, dict):
         raise ValueError("extension_config must be a mapping")
+    database = data.get("database", {})
+    if database is None:
+        database = {}
+    if not isinstance(database, dict):
+        raise ValueError("database must be a mapping or null")
     profiles: dict[str, ProviderProfile] = {}
     raw_profiles = data.get("providers") or []
     if isinstance(raw_profiles, dict):
@@ -433,6 +441,7 @@ def parse_config(data: dict[str, Any] | None, source: str = "embedded") -> Confi
         bash_policy=str(data.get("bash_policy") or "normal").strip().lower(),
         extensions=list(extensions),
         extension_config=dict(extension_config),
+        database=dict(database),
         context_window_tokens=int(compaction.get("context_window_tokens", 200_000)),
         agents_file=_bool(features, "agents_file", True),
         skills=_bool(features, "skills", True),

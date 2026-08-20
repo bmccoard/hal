@@ -412,7 +412,7 @@ exceeds the limit rather than making commit-safety decisions from truncated data
   `/sessions`, `/resume`, `/clear`, `/model`, and `/exit`.
 - **Tools** are executable capabilities available to the model: `bash`,
   `read_file`, `write_file`, `edit_file`, `pdf_read`, `pdf_write`, `pdf_form_write`,
-  `docx_read`, `docx_write`, `grep`, `glob`, `git_init`,
+  `docx_read`, `docx_write`, `db_schema`, `db_query`, `db_explain`, `grep`, `glob`, `git_init`,
   `git_stage`, `git_unstage`, `git_status`, `git_diff`, `git_log`, `git_commit`,
   `git_push`, `git_checkout`, `git_restore`, and `git_show`.
 - **Tool extensions** are separately installed Python packages that add tools
@@ -504,12 +504,49 @@ python new-project.py my-extension
 This copies `example/simple` to `../my-extension`, specializes its distribution,
 entry-point, package, and tool names, and refuses to overwrite an existing path.
 
-The repository also includes [`example/database`](example/database) as a practical
-SQLite extension. It exposes schema inspection, read-only parameterized queries,
-and query plans through named, configuration-controlled connections. It uses
-SQLite's read-only URI mode, query-only setting, authorizer, time limit, and row
-limit, and can load a trusted `sqlite_vec` native extension before model-generated
-SQL is authorized. Install it separately and follow its README for configuration.
+### Built-in database tools
+
+HAL includes `db_schema`, `db_query`, and `db_explain` for safe, read-only SQLite
+inspection. They appear automatically when at least one named connection is
+configured; no extension package or `extensions:` entry is needed:
+
+```yaml
+database:
+  max_rows: 200
+  timeout_ms: 5000
+  connections:
+    work:
+      path: data/work.db
+      # driver: sqlite       # Optional; SQLite is currently the only driver.
+      # read_only: true      # Optional, but may never be set to false.
+      # sqlite_extensions:  # Trusted native code, loaded before query authorization.
+      #   - extensions/vec0.dll
+```
+
+Relative paths resolve from HAL's working directory and must already exist at
+startup. `db_schema` describes tables, views, columns, and indexes. `db_query`
+runs one parameterized query and returns at most the configured row limit.
+`db_explain` returns `EXPLAIN QUERY PLAN` output without returning query data.
+
+Connections use SQLite's read-only URI mode, `PRAGMA query_only`, an authorizer
+that rejects writes, schema changes, transactions, attachment, and model-issued
+pragmas, plus configured time and row limits. Native SQLite extensions are
+executable code, so configure only trusted files. For a database-only agent,
+combine an allowlist with disabled shell access:
+
+```yaml
+bash_policy: deny
+harness:
+  default_capability: database-read
+  capabilities:
+    database-read:
+      description: Inspect configured SQLite databases
+      allowed_tools: [db_schema, db_query, db_explain]
+```
+
+The former [`example/database`](example/database) extension remains as a thin
+compatibility wrapper for existing development setups. New configurations should
+use the built-in `database:` section and must not also enable that extension.
 
 The tool retains the provider-facing name `bash` for compatibility, but selects
 the native shell explicitly. On Windows it uses `pwsh`, then Windows PowerShell,
