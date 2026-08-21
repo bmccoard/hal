@@ -465,7 +465,217 @@ Specifications are controlled inputs during implementation. Workflow implementat
 agents must not silently edit them to make code appear compliant. Specification
 changes should use a separate review workflow or explicit user request.
 
-## 7. `.hal/workflows/example.yaml`
+## 7. Reusable workflow template family
+
+Do not use one workflow for every stage of a project. Keep discovery conversational,
+then select the smallest workflow whose controls match the work. A workflow is an
+execution pipeline, not a substitute for an interactive requirements interview.
+
+Recommended templates:
+
+| Template | Use it when | Node sequence | Required human state |
+| --- | --- | --- | --- |
+| `project-setup` | An approved project definition exists, but the repository structure and controlled documents do not | `setup -> review_setup -> structure_check -> diff_check` | The user has reviewed the project definition and authorized file creation |
+| `simple-change` | One small, low-risk, reversible slice is already precise | `implement -> verify -> diff_check` | Scope, exclusions, and acceptance criteria are settled |
+| `reviewed-change` | A slice crosses boundaries, changes persistent data, handles security/safety concerns, or otherwise benefits from independent review | `plan -> review_plan -> plan_gate -> implement -> review_implementation -> verify -> diff_check` | Controlled specifications and a dependency-ready backlog slice exist |
+
+These names are conventions, not built-in HAL workflows. Materialize the selected
+templates as repository files under `.hal/workflows/`, adapt their budgets and
+commands, and inspect each exact file with `hal workflow inspect <name> --json` before
+running it. Do not install every template blindly: a small repository may need only
+`simple-change` and `reviewed-change`, while a repository that is already established
+does not need `project-setup`.
+
+### Discovery before `project-setup`
+
+Before running `project-setup`, use an interactive HAL session to turn the project
+idea into an approved brief. The discovery prompt must tell HAL to ask questions in
+manageable groups, follow up on unclear answers, avoid inventing product decisions,
+and refrain from creating files until the user approves the summarized definition.
+At minimum, settle or explicitly defer:
+
+- intended users, their problem, and the primary user journeys;
+- in-scope outcomes, exclusions, and observable success measures;
+- target platform, interfaces, data ownership, and external integrations;
+- security, privacy, safety, reliability, and regulatory constraints;
+- technology constraints and important user preferences;
+- the smallest runnable milestone and its acceptance criteria.
+
+If a consequential decision remains unresolved, discovery must state what it blocks.
+Do not pass a vague idea such as `build my application` directly to a setup or change
+workflow. Current workflows do not conduct a multi-turn interview inside an agent
+node: an agent response containing questions completes that node and execution may
+continue. Resolve blocking questions before starting the workflow.
+
+### `project-setup` template
+
+`project-setup` converts one approved brief into controlled specifications, repository
+instructions, verification scaffolding, and—when explicitly required by the brief—a
+small runnable application skeleton with a meaningful test. Its required input should
+be a repository-relative `brief` path rather than an unbounded sentence supplied at
+the command line.
+
+The `setup` agent must:
+
+- read the approved brief, applicable instructions, existing files, and Git status;
+- create requirements, architecture, safety, backlog, and repository guidance using
+  the conventions in this document;
+- create project-appropriate source, test, packaging, and verification scaffolding;
+- implement the smallest runnable vertical slice when the approved brief calls for
+  application code; documentation-only output is not success in that case;
+- preserve existing work and avoid secrets, Git history, deployment, publication,
+  and production systems;
+- stop fail-closed and report a blocking question instead of inventing a material
+  product, protocol, security, safety, or deployment decision.
+
+`review_setup` must independently compare every created artifact with the approved
+brief, correct supported defects, and ensure the backlog can drive later change
+workflows. `structure_check` should be a repository-authored, deterministic command
+that checks required paths and parseable configuration without contacting external
+systems. End with `git diff --check`.
+
+Do not automatically execute a verification script that the same unreviewed setup
+agent just generated. Review that script first, then add it to trusted later workflow
+definitions. A typical repository definition has this shape:
+
+```yaml
+version: 1
+name: project-setup
+description: Create and independently review a project scaffold from an approved brief
+
+inputs:
+  brief:
+    type: path
+    required: true
+
+execution:
+  workspace: current
+  max_parallel: 1
+  budgets:
+    provider_calls: 800
+    tool_calls: 3000
+    elapsed_seconds: 14400
+
+nodes:
+  - id: setup
+    type: agent
+    capability: change
+    fresh_context: true
+    prompt: |
+      Read the approved project brief at ${{ inputs.brief }}, applicable AGENTS.md,
+      this repository, and Git status. Create the controlled specifications,
+      backlog, repository instructions, verification scaffolding, and smallest
+      runnable project slice authorized by the brief. Do not treat documentation-
+      only output as complete when the brief requires application code. Do not
+      invent consequential decisions; stop and report what a missing decision blocks.
+
+  - id: review_setup
+    type: agent
+    capability: review
+    fresh_context: true
+    depends_on: [setup]
+    prompt: |
+      Independently review and correct the project setup against
+      ${{ inputs.brief }} and repository evidence. Verify two-way traceability,
+      runnable code and meaningful tests when required, safe defaults, explicit
+      unresolved questions, and a dependency-ordered backlog. Do not expand scope,
+      alter Git history, deploy, publish, contact production, or expose secrets.
+
+  # Add reviewed, repository-specific structure_check and diff_check command nodes.
+```
+
+The abbreviated YAML intentionally omits commands that cannot be chosen safely
+without knowing the target stack. The setup LLM must add fixed `argv` commands after
+inspecting the repository; it must not interpolate user-controlled command strings.
+
+### `simple-change` template
+
+Use `simple-change` only when independent planning and review would add little value:
+for example, a localized bug fix or a small reversible behavior change with explicit
+acceptance criteria. It is not appropriate for authentication or authorization,
+schema migrations, destructive behavior, concurrency protocols, external side
+effects, safety controls, or broad architectural changes.
+
+Its `implement` prompt must require complete code and tests, prohibit placeholders,
+and fail closed on missing consequential decisions. Its command nodes must call the
+repository's already-reviewed verification script and `git diff --check`:
+
+```yaml
+version: 1
+name: simple-change
+description: Implement and deterministically verify one small low-risk project slice
+
+inputs:
+  scope:
+    type: string
+    required: true
+
+execution:
+  workspace: current
+  max_parallel: 1
+  budgets:
+    provider_calls: 700
+    tool_calls: 2800
+    elapsed_seconds: 14400
+
+nodes:
+  - id: implement
+    type: agent
+    capability: change
+    fresh_context: true
+    prompt: |
+      Read applicable AGENTS.md, controlled project documents, the backlog, current
+      code and tests, and Git status. Completely implement only this approved,
+      bounded, low-risk slice: ${{ inputs.scope }}. Add meaningful tests, run focused
+      checks, and do not leave placeholders. If consequential information is missing,
+      stop and report the blocking question instead of guessing. Do not change
+      controlled specifications, workflows, Git history, secrets, deployment, or
+      production systems.
+
+  - id: verify
+    type: command
+    depends_on: [implement]
+    command:
+      argv: [powershell.exe, -NoProfile, -ExecutionPolicy, Bypass, -File, scripts/verify.ps1]
+    timeout_seconds: 1800
+    max_output_chars: 100000
+    inherit_environment:
+      - PATH
+      - PYTHONPATH
+      - SystemRoot
+      - WINDIR
+      - TEMP
+      - TMP
+
+  - id: diff_check
+    type: command
+    depends_on: [verify]
+    command:
+      argv: [git, diff, --check]
+    timeout_seconds: 300
+    max_output_chars: 30000
+    inherit_environment:
+      - PATH
+      - SystemRoot
+      - WINDIR
+      - TEMP
+      - TMP
+```
+
+### `reviewed-change` template
+
+The complete workflow in the next section is the `reviewed-change` pattern. Keep its
+independent plan review, deterministic plan gate, implementation review, trusted
+verification, and diff check. A repository may save it as
+`.hal/workflows/reviewed-change.yaml` by changing both the file name and the YAML
+`name` field to `reviewed-change`; those names must match. Prefer this template when
+uncertain whether `simple-change` provides enough scrutiny.
+
+Moving from one template to another is a deliberate user or maintainer decision, not
+something an implementation agent should do during a run. None of these templates
+commits, pushes, publishes, deploys, or contacts production.
+
+## 8. `.hal/workflows/example.yaml`
 
 Create the following file at `.hal/workflows/example.yaml`. Replace `PRJ`, budgets,
 paths, and verification commands only after inspecting the target repository. This
@@ -692,7 +902,7 @@ Why the workflow is structured this way:
 - Budgets and timeouts bound model loops, tools, commands, and total elapsed time.
 - There is deliberately no commit, push, PR, deploy, or production operation.
 
-## 8. `scripts/setup-hal.ps1`
+## 9. `scripts/setup-hal.ps1`
 
 This script creates the virtual environment if needed, installs the local HAL source,
 checks the configuration, and validates the workflow. It does not create `.env`, run
@@ -759,7 +969,7 @@ Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\setup-hal.ps1 -HalSource "C:\path\to\hal"
 ```
 
-## 9. `scripts/run-workflow.ps1`
+## 10. `scripts/run-workflow.ps1`
 
 This runner validates the workflow, displays its digest, and requires an explicit
 confirmation unless `-TrustReviewedDigest` is supplied. Save it as
@@ -832,7 +1042,7 @@ Examples:
 Do not hard-code a digest until the workflow has been reviewed. Any workflow edit
 changes the digest and must invalidate prior trust.
 
-## 10. `scripts/workflow-status.ps1`
+## 11. `scripts/workflow-status.ps1`
 
 Save this as `scripts/workflow-status.ps1`:
 
@@ -888,7 +1098,7 @@ Resume does not mean “rerun everything”: HAL preserves completed node state.
 indeterminate/non-resumable node only after inspecting its effects and confirming
 that repeating it is safe.
 
-## 11. `scripts/verify.ps1`
+## 12. `scripts/verify.ps1`
 
 The deterministic verification script is project-specific. The workflow must call a
 reviewed repository script, not ask the model to choose whether or how to verify.
@@ -939,7 +1149,7 @@ Make target. Verification should cover, when applicable:
 Keep `git diff --check` as its own final workflow node so whitespace errors cannot be
 hidden by earlier output.
 
-## 12. Minimal `hal.yaml` guidance
+## 13. Minimal `hal.yaml` guidance
 
 Provider/model configuration changes over time and must be selected for the local
 HAL installation. Use HAL's current `hal.yaml.example` as the schema authority. At a
@@ -977,7 +1187,7 @@ credentials in tracked configuration or prompts. Ensure `.gitignore` covers `.en
 virtual environments, HAL run/lock state, test caches, build output, and other local
 artifacts appropriate to the project.
 
-## 13. Suggested `AGENTS.md` controls
+## 14. Suggested `AGENTS.md` controls
 
 Tailor these rules to the project instead of blindly replacing existing instructions:
 
@@ -1001,18 +1211,30 @@ Tailor these rules to the project instead of blindly replacing existing instruct
   explicitly authorizes that separate action.
 ```
 
-## 14. Example operating prompts
+## 15. Example operating prompts
 
-### Prompt to discover and draft the specifications
+### Prompt to discover the project before drafting specifications
 
 ```text
-Inspect this repository and all authoritative source material. Draft
-docs/requirements.md, docs/architecture.md, and docs/safety.md using the ID,
-evidence, traceability, and quality-gate conventions in workflow-instructions.md.
-Do not implement the application. Separate observed facts from proposals and list
-every unresolved decision with an owner and blocking impact. Finish with a two-way
-traceability audit and a concise list of questions requiring human/domain review.
+Help me define this project before creating or changing any files. Inspect the
+repository and authoritative source material read-only, then interview me in
+manageable groups about users, goals, scope, exclusions, workflows, data,
+integrations, platform, constraints, risks, preferences, the smallest runnable
+milestone, and observable acceptance criteria. Follow up when an answer is unclear.
+Do not invent product decisions or treat proposals as facts.
+
+When you have enough information, summarize the proposed project definition,
+assumptions, explicitly deferred decisions, and every unresolved question with its
+owner and blocking impact. Then stop and ask me to approve or correct the definition.
+Do not draft specifications, scaffold the project, install dependencies, or implement
+code until I explicitly approve that summary in a later message.
 ```
+
+After approval, supply the accepted definition as the controlled brief for
+`project-setup`. For an established repository that does not need setup, use a
+separate request to draft or revise `docs/requirements.md`, `docs/architecture.md`,
+and `docs/safety.md` with the ID, evidence, traceability, and quality-gate conventions
+in this document.
 
 ### Prompt to review the specifications independently
 
@@ -1067,7 +1289,7 @@ systems changed. Report findings by severity with file/line evidence. Do not com
 or push.
 ```
 
-## 15. Final readiness checklist
+## 16. Final readiness checklist
 
 Before the first implementation run, confirm:
 
