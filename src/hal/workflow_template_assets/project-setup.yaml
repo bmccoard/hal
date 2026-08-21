@@ -1,0 +1,97 @@
+# HAL workflow template. Replace both HAL_TEMPLATE_NOT_CONFIGURED commands with
+# reviewed, fixed argv checks for the target repository before trusting or running it.
+version: 1
+name: project-setup
+description: Create and independently review a project scaffold from an approved brief
+
+inputs:
+  brief:
+    type: path
+    default: docs/project-brief.md
+
+execution:
+  workspace: current
+  max_parallel: 1
+  timeout_seconds: 14400
+  budgets:
+    node_attempts: 8
+    provider_calls: 800
+    tool_calls: 3000
+    elapsed_seconds: 14400
+
+nodes:
+  - id: configuration_gate
+    type: command
+    command:
+      argv:
+        - python
+        - -c
+        - "raise SystemExit('HAL_TEMPLATE_NOT_CONFIGURED: replace configuration_gate with a reviewed fixed preflight command')"
+    timeout_seconds: 30
+    max_output_chars: 10000
+    inherit_environment: [PATH]
+
+  - id: setup
+    type: agent
+    capability: change
+    fresh_context: true
+    depends_on: [configuration_gate]
+    budgets:
+      provider_calls: 400
+      tool_calls: 1600
+      elapsed_seconds: 7200
+    prompt: |
+      Read the approved project brief at ${{ inputs.brief }}, every applicable
+      AGENTS.md, the current repository, and Git status. Preserve user-owned work.
+
+      Create the controlled requirements, architecture, safety, backlog, repository
+      instructions, verification scaffolding, and the smallest runnable vertical
+      slice authorized by the brief. Documentation-only output is not complete when
+      the approved milestone requires application code. Add meaningful tests for
+      observable acceptance criteria.
+
+      Do not invent consequential product, protocol, security, safety, or deployment
+      decisions. Stop and report what a missing decision blocks. Do not read or alter
+      secrets, change Git history, commit, push, publish, deploy, contact production,
+      or modify this workflow.
+
+  - id: review_setup
+    type: agent
+    capability: review
+    fresh_context: true
+    depends_on: [setup]
+    budgets:
+      provider_calls: 350
+      tool_calls: 1200
+      elapsed_seconds: 5400
+    prompt: |
+      Independently review and correct the project setup against
+      ${{ inputs.brief }} and repository evidence. Inspect Git status and the complete
+      diff. Verify two-way traceability, runnable code and meaningful tests when the
+      milestone requires them, safe defaults, explicit unresolved questions, and a
+      dependency-ordered backlog.
+
+      Do not expand scope, weaken requirements or tests, alter Git history, commit,
+      push, deploy, publish, contact production, expose secrets, or modify this
+      workflow. Leave genuinely blocked behavior fail-closed and report the blocker.
+
+  - id: structure_check
+    type: command
+    depends_on: [review_setup]
+    command:
+      argv:
+        - python
+        - -c
+        - "raise SystemExit('HAL_TEMPLATE_NOT_CONFIGURED: replace structure_check with reviewed fixed repository checks')"
+    timeout_seconds: 300
+    max_output_chars: 30000
+    inherit_environment: [PATH]
+
+  - id: diff_check
+    type: command
+    depends_on: [structure_check]
+    command:
+      argv: [git, diff, --check]
+    timeout_seconds: 300
+    max_output_chars: 30000
+    inherit_environment: [PATH]

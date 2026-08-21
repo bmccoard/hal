@@ -48,6 +48,9 @@ from .workflow_worktrees import (
 )
 from .workflow_resume import resume_persisted_workflow
 from .workflow_state import WorkflowRunStore
+from .workflow_templates import (
+    discover_workflow_templates, initialize_workflow_template,
+)
 from .subagents import DelegateTool
 
 
@@ -67,6 +70,10 @@ USAGE:
   hal harness [name] [--json]
                      Inspect resolved harness policy without starting a model run
   hal workflow list [--json]
+  hal workflow templates [--json]
+                     List packaged workflow templates
+  hal workflow init <template> [--json]
+                     Copy one template into .hal/workflows without overwriting
   hal workflow inspect <name> [--json]
                      Inspect workflow definitions without executing them
   hal workflow run <name> [--input name=value] [--trust-digest sha256] [--json]
@@ -296,19 +303,25 @@ def run_workflow_inspection(args: list[str], stdout: TextIO, stderr: TextIO) -> 
         return run_workflow_runs(args[1:], stdout, stderr)
     if args and args[0] == "run":
         return run_repository_workflow(args[1:], stdout, stderr)
+    if args and args[0] in {"templates", "init"}:
+        return run_workflow_templates(args, stdout, stderr)
+    usage = (
+        "usage: hal workflow templates [--json] | init <template> [--json] | "
+        "list [--json] | inspect <name> [--json]"
+    )
     json_output = "--json" in args
     positional = [item for item in args if item != "--json"]
     if any(item.startswith("-") for item in positional):
-        print("usage: hal workflow list [--json] | inspect <name> [--json]", file=stderr)
+        print(usage, file=stderr)
         return 2
     if not positional or positional[0] not in {"list", "inspect"}:
-        print("usage: hal workflow list [--json] | inspect <name> [--json]", file=stderr)
+        print(usage, file=stderr)
         return 2
     action = positional[0]
     if (action == "list" and len(positional) != 1) or (
         action == "inspect" and len(positional) != 2
     ):
-        print("usage: hal workflow list [--json] | inspect <name> [--json]", file=stderr)
+        print(usage, file=stderr)
         return 2
     root = workspace_root(Path.cwd())
     try:
@@ -350,6 +363,66 @@ def run_workflow_inspection(args: list[str], stdout: TextIO, stderr: TextIO) -> 
             )
     else:
         print(json.dumps(payload, indent=2), file=stdout)
+    return 0
+
+
+def run_workflow_templates(args: list[str], stdout: TextIO, stderr: TextIO) -> int:
+    """List or safely copy packaged workflow templates."""
+    action = args[0] if args else ""
+    parser = argparse.ArgumentParser(prog=f"hal workflow {action}", add_help=True)
+    if action == "init":
+        parser.add_argument("name")
+    parser.add_argument("--json", action="store_true", dest="json_output")
+    try:
+        options = parser.parse_args(args[1:])
+    except SystemExit as exc:
+        return int(exc.code)
+
+    try:
+        templates = discover_workflow_templates()
+        if action == "templates":
+            payload = {
+                "templates": [
+                    {
+                        "name": template.name,
+                        "description": template.description,
+                        "digest": template.digest,
+                        "configured": False,
+                    }
+                    for template in templates.values()
+                ],
+            }
+        else:
+            root = workspace_root(Path.cwd())
+            template, destination = initialize_workflow_template(
+                options.name.lower(), root,
+            )
+            payload = {
+                "name": template.name,
+                "description": template.description,
+                "template_digest": template.digest,
+                "path": destination.relative_to(root).as_posix(),
+                "configured": False,
+                "next": (
+                    "replace every HAL_TEMPLATE_NOT_CONFIGURED command, then run "
+                    f"hal workflow inspect {template.name} --json"
+                ),
+            }
+    except (OSError, ValueError) as exc:
+        print(f"workflow template: {exc}", file=stderr)
+        return 1
+
+    if options.json_output:
+        print(json.dumps(payload, indent=2), file=stdout)
+    elif action == "templates":
+        for item in payload["templates"]:
+            print(
+                f"{item['name']}\tconfigured=false\t{item['description']}",
+                file=stdout,
+            )
+    else:
+        print(f"Created {payload['path']} from template {payload['name']!r}.", file=stdout)
+        print(f"Next: {payload['next']}", file=stdout)
     return 0
 
 

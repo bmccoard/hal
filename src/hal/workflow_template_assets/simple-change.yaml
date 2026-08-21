@@ -1,0 +1,74 @@
+# HAL workflow template. Replace both HAL_TEMPLATE_NOT_CONFIGURED commands with
+# reviewed, fixed argv checks for the target repository before trusting or running it.
+version: 1
+name: simple-change
+description: Implement and verify one small low-risk project slice
+
+inputs:
+  scope:
+    type: string
+    required: true
+
+execution:
+  workspace: current
+  max_parallel: 1
+  timeout_seconds: 14400
+  budgets:
+    node_attempts: 6
+    provider_calls: 700
+    tool_calls: 2800
+    elapsed_seconds: 14400
+
+nodes:
+  - id: configuration_gate
+    type: command
+    command:
+      argv:
+        - python
+        - -c
+        - "raise SystemExit('HAL_TEMPLATE_NOT_CONFIGURED: replace configuration_gate with a reviewed fixed preflight command')"
+    timeout_seconds: 30
+    max_output_chars: 10000
+    inherit_environment: [PATH]
+
+  - id: implement
+    type: agent
+    capability: change
+    fresh_context: true
+    depends_on: [configuration_gate]
+    budgets:
+      provider_calls: 600
+      tool_calls: 2400
+      elapsed_seconds: 10800
+    prompt: |
+      Read applicable AGENTS.md, controlled project documents, the backlog, current
+      code and tests, and Git status. Preserve user-owned work. Completely implement
+      only this approved bounded low-risk slice:
+      ${{ inputs.scope }}
+
+      Add meaningful tests, run focused checks, and leave no placeholders. If
+      consequential information is missing, stop and report the blocking question
+      instead of guessing. Do not modify controlled specifications or workflows,
+      weaken tests, alter Git history, read or expose secrets, commit, push, publish,
+      deploy, or contact production.
+
+  - id: verify
+    type: command
+    depends_on: [implement]
+    command:
+      argv:
+        - python
+        - -c
+        - "raise SystemExit('HAL_TEMPLATE_NOT_CONFIGURED: replace verify with the reviewed repository verification command')"
+    timeout_seconds: 1800
+    max_output_chars: 100000
+    inherit_environment: [PATH]
+
+  - id: diff_check
+    type: command
+    depends_on: [verify]
+    command:
+      argv: [git, diff, --check]
+    timeout_seconds: 300
+    max_output_chars: 30000
+    inherit_environment: [PATH]

@@ -1,0 +1,157 @@
+# HAL workflow template. Replace both HAL_TEMPLATE_NOT_CONFIGURED commands with
+# reviewed, fixed argv checks for the target repository before trusting or running it.
+version: 1
+name: reviewed-change
+description: Plan, independently review, implement, audit, and verify one bounded slice
+
+inputs:
+  requirements:
+    type: path
+    default: docs/requirements.md
+  backlog:
+    type: path
+    default: backlog.md
+  scope:
+    type: string
+    required: true
+
+execution:
+  workspace: current
+  max_parallel: 1
+  timeout_seconds: 43200
+  budgets:
+    node_attempts: 12
+    provider_calls: 2000
+    tool_calls: 8000
+    elapsed_seconds: 43200
+
+nodes:
+  - id: configuration_gate
+    type: command
+    command:
+      argv:
+        - python
+        - -c
+        - "raise SystemExit('HAL_TEMPLATE_NOT_CONFIGURED: replace configuration_gate with a reviewed fixed preflight command')"
+    timeout_seconds: 30
+    max_output_chars: 10000
+    inherit_environment: [PATH]
+
+  - id: plan
+    type: agent
+    capability: change
+    fresh_context: true
+    depends_on: [configuration_gate]
+    budgets:
+      provider_calls: 250
+      tool_calls: 800
+      elapsed_seconds: 3600
+    prompt: |
+      Read every applicable AGENTS.md, inspect the repository and Git status, and
+      treat these as controlled sources: ${{ inputs.backlog }},
+      ${{ inputs.requirements }}, docs/architecture.md, and docs/safety.md.
+
+      Plan only this bounded slice: ${{ inputs.scope }}
+
+      Create or replace docs/implementation-plan.md with status
+      DRAFT_PENDING_HAL_REVIEW. Include scope, exclusions, dependencies, controlled
+      IDs, affected boundaries, failure behavior, migrations, security and safety
+      controls, acceptance criteria, executable tests, and unresolved blockers.
+      Do not implement code, change controlled specifications or workflows, alter Git
+      history, read secrets, commit, push, publish, deploy, or contact production.
+
+  - id: review_plan
+    type: agent
+    capability: change
+    fresh_context: true
+    depends_on: [plan]
+    budgets:
+      provider_calls: 300
+      tool_calls: 900
+      elapsed_seconds: 3600
+    prompt: |
+      Independently and adversarially review docs/implementation-plan.md for
+      ${{ inputs.scope }}. Re-read repository evidence and controlled documents.
+      Correct the plan in place. Reject scope creep, invented behavior, missing
+      traceability, boundary violations, unsafe defaults, weak failure behavior,
+      migrations without rollback, and tests that could pass when behavior is broken.
+
+      Set `| Status | HAL_REVIEWED_READY |` only when the plan is bounded, complete,
+      safe to implement, and has no unresolved blocker. Otherwise retain
+      `| Status | DRAFT_PENDING_HAL_REVIEW |` and record the blocker. Modify only the
+      plan; do not implement code, modify workflows or controlled specifications,
+      alter Git history, read secrets, commit, push, publish, or deploy.
+
+  - id: plan_gate
+    type: command
+    depends_on: [review_plan]
+    command:
+      argv:
+        - python
+        - -c
+        - "from pathlib import Path; marker='| Status | HAL_REVIEWED_READY |'; text=Path('docs/implementation-plan.md').read_text(encoding='utf-8'); raise SystemExit(0 if marker in {line.strip() for line in text.splitlines()} else 'plan did not pass HAL review')"
+    timeout_seconds: 30
+    max_output_chars: 10000
+    inherit_environment: [PATH]
+
+  - id: implement
+    type: agent
+    capability: change
+    fresh_context: true
+    depends_on: [plan_gate]
+    budgets:
+      provider_calls: 600
+      tool_calls: 2400
+      elapsed_seconds: 10800
+    prompt: |
+      Read applicable AGENTS.md, the repository, controlled documents, and the
+      HAL-reviewed implementation plan. Implement only ${{ inputs.scope }}.
+      Satisfy every acceptance criterion and safety invariant, preserve documented
+      boundaries and failure behavior, and add meaningful positive, boundary,
+      negative, concurrency, and fault tests as applicable.
+
+      Stop fail-closed on a genuine blocker. Never weaken requirements or tests,
+      expand scope, modify controlled specifications or workflows, alter Git history,
+      read secrets, commit, push, publish, deploy, or contact production.
+
+  - id: review_implementation
+    type: agent
+    capability: review
+    fresh_context: true
+    depends_on: [implement]
+    budgets:
+      provider_calls: 500
+      tool_calls: 2000
+      elapsed_seconds: 7200
+    prompt: |
+      Independently review and fix the implementation for ${{ inputs.scope }}.
+      Re-read repository evidence, controlled documents, the reviewed plan, Git
+      status, the complete tracked diff, and relevant untracked files without reading
+      ignored or secret files. Verify every acceptance criterion, boundary, failure
+      path, and safety invariant. Fix all in-scope defects and strengthen weak tests.
+
+      If a fix requires scope expansion or an unresolved decision, report the blocker
+      and leave behavior fail-closed. Do not change controlled specifications, the
+      reviewed plan, workflows, backlog status, Git history, secrets, deployment, or
+      production systems.
+
+  - id: verify
+    type: command
+    depends_on: [review_implementation]
+    command:
+      argv:
+        - python
+        - -c
+        - "raise SystemExit('HAL_TEMPLATE_NOT_CONFIGURED: replace verify with the reviewed repository verification command')"
+    timeout_seconds: 1800
+    max_output_chars: 100000
+    inherit_environment: [PATH]
+
+  - id: diff_check
+    type: command
+    depends_on: [verify]
+    command:
+      argv: [git, diff, --check]
+    timeout_seconds: 300
+    max_output_chars: 30000
+    inherit_environment: [PATH]

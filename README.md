@@ -327,6 +327,8 @@ These are operating-system shell commands, not model tools or skills:
 | `hal tui` | Requires the full-screen interface and reports an error on unsupported terminals. |
 | `hal run "..."` | Runs one prompt and exits without creating a session. |
 | `hal run --json "..."` | Runs one headless prompt and returns JSON containing status, timing, tool counts, and the final answer. |
+| `hal workflow templates --json` | Lists packaged, inert workflow templates. |
+| `hal workflow init <template> --json` | Copies one template into `.hal/workflows/` without overwriting. |
 | `hal workflow inspect <name> --json` | Validates a repository workflow and reports its trust digest and effects. |
 | `hal workflow run <name> --trust-digest <digest> --json` | Runs a trusted repository workflow and returns its terminal node results as JSON. |
 | `hal sessions` | Lists saved sessions in a compact view with short selectors. |
@@ -342,6 +344,22 @@ tool.
 Repository workflow runs print concise node-start and node-completion updates to
 standard error, including elapsed time and failure reasons. With `--json`, standard
 output remains a single machine-readable JSON document.
+
+HAL packages `project-setup`, `simple-change`, and `reviewed-change` templates. They
+are not active workflows until copied into the current repository:
+
+```powershell
+hal workflow templates
+hal workflow init reviewed-change
+```
+
+Initialization refuses to overwrite an existing file. Every fresh copy contains a
+leading `configuration_gate` and a later verification command that fail with
+`HAL_TEMPLATE_NOT_CONFIGURED`. Replace every sentinel with reviewed, fixed `argv`
+checks for the repository before inspecting and trusting the workflow. Keeping the
+gate first prevents an untouched template from starting an agent or modifying files.
+The copied YAML is repository-owned and may be version-controlled after review; edits
+change its trust digest.
 
 The TUI uses plain `Enter` or `F2` to send. Use `Ctrl+J`, `F3`, `Shift+Enter`,
 or the visible **New line** button to add a line. Use `F4` or the visible **Paste**

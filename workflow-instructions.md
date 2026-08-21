@@ -11,7 +11,7 @@ The intended result is:
 project-root/
 |-- .hal/
 |   `-- workflows/
-|       `-- example.yaml
+|       `-- reviewed-change.yaml
 |-- docs/
 |   |-- requirements.md
 |   |-- architecture.md
@@ -54,8 +54,10 @@ Create or improve these controlled documents:
 - backlog.md
 - AGENTS.md, if it does not already provide adequate repository instructions
 
-Create this orchestration and its Windows runners:
-- .hal/workflows/example.yaml
+Initialize and adapt this packaged orchestration, then create its Windows runners:
+- run `hal workflow init reviewed-change`; never overwrite an existing workflow
+- adapt .hal/workflows/reviewed-change.yaml and replace every
+  HAL_TEMPLATE_NOT_CONFIGURED command with reviewed fixed argv
 - scripts/setup-hal.ps1
 - scripts/run-workflow.ps1
 - scripts/workflow-status.ps1
@@ -81,8 +83,8 @@ push, publish, deploy, contact production, alter secrets, or delete untracked fi
 
 Adapt language, package names, test commands, and safety depth to this project.
 Retain the control structure and traceability conventions in this reference. Verify
-the workflow with `hal workflow inspect example --json`; do not run it until the
-user reviews the reported digest, capabilities, commands, and effects.
+the workflow with `hal workflow inspect reviewed-change --json`; do not run it until
+the user reviews the reported digest, capabilities, commands, and effects.
 
 Before finishing, run the repository's safe read-only/configuration checks, inspect
 the final Git diff, run `git diff --check`, and report created files, unresolved
@@ -475,16 +477,18 @@ Recommended templates:
 
 | Template | Use it when | Node sequence | Required human state |
 | --- | --- | --- | --- |
-| `project-setup` | An approved project definition exists, but the repository structure and controlled documents do not | `setup -> review_setup -> structure_check -> diff_check` | The user has reviewed the project definition and authorized file creation |
-| `simple-change` | One small, low-risk, reversible slice is already precise | `implement -> verify -> diff_check` | Scope, exclusions, and acceptance criteria are settled |
-| `reviewed-change` | A slice crosses boundaries, changes persistent data, handles security/safety concerns, or otherwise benefits from independent review | `plan -> review_plan -> plan_gate -> implement -> review_implementation -> verify -> diff_check` | Controlled specifications and a dependency-ready backlog slice exist |
+| `project-setup` | An approved project definition exists, but the repository structure and controlled documents do not | `configuration_gate -> setup -> review_setup -> structure_check -> diff_check` | The user has reviewed the project definition and authorized file creation |
+| `simple-change` | One small, low-risk, reversible slice is already precise | `configuration_gate -> implement -> verify -> diff_check` | Scope, exclusions, and acceptance criteria are settled |
+| `reviewed-change` | A slice crosses boundaries, changes persistent data, handles security/safety concerns, or otherwise benefits from independent review | `configuration_gate -> plan -> review_plan -> plan_gate -> implement -> review_implementation -> verify -> diff_check` | Controlled specifications and a dependency-ready backlog slice exist |
 
-These names are conventions, not built-in HAL workflows. Materialize the selected
-templates as repository files under `.hal/workflows/`, adapt their budgets and
-commands, and inspect each exact file with `hal workflow inspect <name> --json` before
-running it. Do not install every template blindly: a small repository may need only
-`simple-change` and `reviewed-change`, while a repository that is already established
-does not need `project-setup`.
+HAL packages these templates, but they are inert until explicitly copied into a
+repository. List them with `hal workflow templates` and copy only the selected one
+with `hal workflow init <name>`. Initialization never overwrites an existing workflow.
+The copied file is repository-owned: adapt its fixed commands and budgets, remove
+every `HAL_TEMPLATE_NOT_CONFIGURED` sentinel, and inspect the exact file with
+`hal workflow inspect <name> --json` before running it. Do not initialize every
+template blindly: a small repository may need only `simple-change` and
+`reviewed-change`, while an established repository does not need `project-setup`.
 
 ### Discovery before `project-setup`
 
@@ -558,25 +562,34 @@ bundled skill or the session was started before HAL was updated. Install or refr
 the intended HAL checkout using the install guidance in its README, restart HAL,
 and invoke the skill again. Do not replace it with `hal run "/new-project ..."`.
 
-The next step requires a complete repository workflow, not merely the abbreviated
-template below. If the target repository does not already have one, use a separate
-interactive request after reviewing the durable brief:
+The next step requires a repository-owned workflow. Initialize the packaged template
+after reviewing the durable brief:
+
+```powershell
+hal workflow init project-setup
+```
+
+The untouched copy is deliberately fail-closed. Its `configuration_gate` and
+`structure_check` commands exit nonzero with `HAL_TEMPLATE_NOT_CONFIGURED`, so no
+agent node runs accidentally. Use a separate interactive request to adapt the copied
+file:
 
 ```text
 Using the approved docs/project-brief.md and the project-setup template in
-workflow-instructions.md, create only .hal/workflows/project-setup.yaml. Complete the
-abbreviated template with fixed, repository-appropriate structure_check and
-diff_check command nodes. The structure check must validate the files and parseable
-configuration required by the approved smallest milestone without executing a
-model-generated verification script or contacting external systems. Do not scaffold
-the application, install dependencies, or run the workflow. Inspect the resulting
-workflow definition and report its effects and any unresolved blocker.
+workflow-instructions.md, adapt only .hal/workflows/project-setup.yaml. Replace every
+HAL_TEMPLATE_NOT_CONFIGURED command with fixed, repository-appropriate argv checks.
+The configuration gate must validate prerequisites before any agent mutation. The
+structure check must validate files and parseable configuration required by the
+approved smallest milestone without executing a model-generated verification script
+or contacting external systems. Do not scaffold the application, install
+dependencies, or run the workflow. Inspect the resulting definition and report its
+effects and any unresolved blocker.
 ```
 
 Review the resulting YAML. Its file name and `name` field must both be
-`project-setup`, it must contain no placeholder nodes or commands, and every command
-must use fixed `argv` rather than interpolated user-controlled command text. Then
-inspect and run the exact trusted definition:
+`project-setup`, it must contain no `HAL_TEMPLATE_NOT_CONFIGURED` sentinel, and every
+command must use fixed `argv` rather than interpolated user-controlled command text.
+Then inspect and run the exact trusted definition:
 
 ```powershell
 hal workflow inspect project-setup --json
@@ -619,57 +632,8 @@ systems. End with `git diff --check`.
 
 Do not automatically execute a verification script that the same unreviewed setup
 agent just generated. Review that script first, then add it to trusted later workflow
-definitions. A typical repository definition has this shape:
-
-```yaml
-version: 1
-name: project-setup
-description: Create and independently review a project scaffold from an approved brief
-
-inputs:
-  brief:
-    type: path
-    required: true
-
-execution:
-  workspace: current
-  max_parallel: 1
-  budgets:
-    provider_calls: 800
-    tool_calls: 3000
-    elapsed_seconds: 14400
-
-nodes:
-  - id: setup
-    type: agent
-    capability: change
-    fresh_context: true
-    prompt: |
-      Read the approved project brief at ${{ inputs.brief }}, applicable AGENTS.md,
-      this repository, and Git status. Create the controlled specifications,
-      backlog, repository instructions, verification scaffolding, and smallest
-      runnable project slice authorized by the brief. Do not treat documentation-
-      only output as complete when the brief requires application code. Do not
-      invent consequential decisions; stop and report what a missing decision blocks.
-
-  - id: review_setup
-    type: agent
-    capability: review
-    fresh_context: true
-    depends_on: [setup]
-    prompt: |
-      Independently review and correct the project setup against
-      ${{ inputs.brief }} and repository evidence. Verify two-way traceability,
-      runnable code and meaningful tests when required, safe defaults, explicit
-      unresolved questions, and a dependency-ordered backlog. Do not expand scope,
-      alter Git history, deploy, publish, contact production, or expose secrets.
-
-  # Add reviewed, repository-specific structure_check and diff_check command nodes.
-```
-
-The abbreviated YAML intentionally omits commands that cannot be chosen safely
-without knowing the target stack. The setup LLM must add fixed `argv` commands after
-inspecting the repository; it must not interpolate user-controlled command strings.
+definitions. The packaged YAML copied by `hal workflow init project-setup` is the
+canonical template; do not recreate it from this narrative.
 
 ### `simple-change` template
 
@@ -680,90 +644,30 @@ schema migrations, destructive behavior, concurrency protocols, external side
 effects, safety controls, or broad architectural changes.
 
 Its `implement` prompt must require complete code and tests, prohibit placeholders,
-and fail closed on missing consequential decisions. Its command nodes must call the
-repository's already-reviewed verification script and `git diff --check`:
-
-```yaml
-version: 1
-name: simple-change
-description: Implement and deterministically verify one small low-risk project slice
-
-inputs:
-  scope:
-    type: string
-    required: true
-
-execution:
-  workspace: current
-  max_parallel: 1
-  budgets:
-    provider_calls: 700
-    tool_calls: 2800
-    elapsed_seconds: 14400
-
-nodes:
-  - id: implement
-    type: agent
-    capability: change
-    fresh_context: true
-    prompt: |
-      Read applicable AGENTS.md, controlled project documents, the backlog, current
-      code and tests, and Git status. Completely implement only this approved,
-      bounded, low-risk slice: ${{ inputs.scope }}. Add meaningful tests, run focused
-      checks, and do not leave placeholders. If consequential information is missing,
-      stop and report the blocking question instead of guessing. Do not change
-      controlled specifications, workflows, Git history, secrets, deployment, or
-      production systems.
-
-  - id: verify
-    type: command
-    depends_on: [implement]
-    command:
-      argv: [powershell.exe, -NoProfile, -ExecutionPolicy, Bypass, -File, scripts/verify.ps1]
-    timeout_seconds: 1800
-    max_output_chars: 100000
-    inherit_environment:
-      - PATH
-      - PYTHONPATH
-      - SystemRoot
-      - WINDIR
-      - TEMP
-      - TMP
-
-  - id: diff_check
-    type: command
-    depends_on: [verify]
-    command:
-      argv: [git, diff, --check]
-    timeout_seconds: 300
-    max_output_chars: 30000
-    inherit_environment:
-      - PATH
-      - SystemRoot
-      - WINDIR
-      - TEMP
-      - TMP
-```
+and fail closed on missing consequential decisions. Initialize it with
+`hal workflow init simple-change`, then replace both sentinel commands. The
+`configuration_gate` must validate prerequisites without mutation, and `verify` must
+call the repository's already-reviewed verification entry point. Keep
+`git diff --check` as the final node.
 
 ### `reviewed-change` template
 
-The complete workflow in the next section is the `reviewed-change` pattern. Keep its
+Initialize it with `hal workflow init reviewed-change`. Keep its configuration gate,
 independent plan review, deterministic plan gate, implementation review, trusted
-verification, and diff check. A repository may save it as
-`.hal/workflows/reviewed-change.yaml` by changing both the file name and the YAML
-`name` field to `reviewed-change`; those names must match. Prefer this template when
-uncertain whether `simple-change` provides enough scrutiny.
+verification, and diff check. Replace both sentinel commands before running it.
+Prefer this template when uncertain whether `simple-change` provides enough scrutiny.
 
 Moving from one template to another is a deliberate user or maintainer decision, not
 something an implementation agent should do during a run. None of these templates
 commits, pushes, publishes, deploys, or contacts production.
 
-## 8. `.hal/workflows/example.yaml`
+## 8. Extended reviewed-workflow example
 
-Create the following file at `.hal/workflows/example.yaml`. Replace `PRJ`, budgets,
-paths, and verification commands only after inspecting the target repository. This
-example intentionally performs local edits but has no commit, push, publication, or
-deployment node.
+The following legacy `example.yaml` is an extended explanatory reference. For normal
+use, initialize the packaged `reviewed-change` template instead. If retaining this
+example, replace `PRJ`, budgets, paths, and verification commands only after inspecting
+the target repository. It intentionally performs local edits but has no commit, push,
+publication, or deployment node.
 
 ```yaml
 version: 1
@@ -1009,7 +913,7 @@ $halRoot = (Resolve-Path -LiteralPath $HalSource).Path
 $venvRoot = Join-Path $projectRoot ".venv"
 $venvPython = Join-Path $venvRoot "Scripts\python.exe"
 $halExe = Join-Path $venvRoot "Scripts\hal.exe"
-$workflowFile = Join-Path $projectRoot ".hal\workflows\example.yaml"
+$workflowFile = Join-Path $projectRoot ".hal\workflows\reviewed-change.yaml"
 
 if (-not (Test-Path -LiteralPath (Join-Path $halRoot "pyproject.toml") -PathType Leaf)) {
     throw "HAL source does not contain pyproject.toml: $halRoot"
@@ -1034,7 +938,7 @@ try {
     & $halExe doctor
     if ($LASTEXITCODE -ne 0) { throw "HAL doctor failed" }
 
-    & $halExe workflow inspect example --json
+    & $halExe workflow inspect reviewed-change --json
     if ($LASTEXITCODE -ne 0) { throw "Workflow validation failed" }
 }
 finally {
@@ -1079,13 +983,13 @@ if (-not (Test-Path -LiteralPath $halExe -PathType Leaf)) {
 
 Push-Location $projectRoot
 try {
-    $inspectText = (& $halExe workflow inspect example --json | Out-String)
+    $inspectText = (& $halExe workflow inspect reviewed-change --json | Out-String)
     if ($LASTEXITCODE -ne 0) { throw "Workflow inspection failed" }
     $inspection = $inspectText | ConvertFrom-Json
     $digest = [string]$inspection.digest
     if ([string]::IsNullOrWhiteSpace($digest)) { throw "Inspect returned no digest" }
 
-    Write-Host "Workflow: example"
+    Write-Host "Workflow: reviewed-change"
     Write-Host "Digest:   $digest"
     Write-Host "Scope:    $Scope"
 
@@ -1099,7 +1003,7 @@ try {
         if ($answer -cne "RUN") { throw "Cancelled by user" }
     }
 
-    & $halExe workflow run example `
+    & $halExe workflow run reviewed-change `
         --input "scope=$Scope" `
         --trust-digest $digest `
         --json
@@ -1385,8 +1289,8 @@ Before the first implementation run, confirm:
 - [ ] Safety maps hazards to invariants, controls, tests, and release gates.
 - [ ] Cross-document terms, defaults, states, permissions, and IDs agree.
 - [ ] The backlog slice is bounded, dependency-ready, and has explicit exclusions.
-- [ ] The selected workflow template was fully materialized for this repository; no
-      abbreviated placeholder nodes remain.
+- [ ] Every `HAL_TEMPLATE_NOT_CONFIGURED` sentinel was replaced with a reviewed,
+      fixed repository command.
 - [ ] The selected workflow passes `hal workflow inspect <name> --json`.
 - [ ] The human reviewed the exact workflow digest, capabilities, commands, and
   effects that will run.
