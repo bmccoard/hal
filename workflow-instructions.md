@@ -488,10 +488,11 @@ does not need `project-setup`.
 
 ### Discovery before `project-setup`
 
-Before running `project-setup`, use an interactive HAL session to turn the project
-idea into an approved brief. The discovery prompt must tell HAL to ask questions in
-manageable groups, follow up on unclear answers, avoid inventing product decisions,
-and refrain from creating files until the user approves the summarized definition.
+Before running `project-setup`, invoke `/new-project <initial idea>` in an interactive
+HAL session to turn the project idea into an approved brief. The discovery skill tells
+HAL to ask questions in manageable groups, follow up on unclear answers, avoid
+inventing product decisions, and refrain from creating files until the user approves
+the summarized definition.
 At minimum, settle or explicitly defer:
 
 - intended users, their problem, and the primary user journeys;
@@ -506,6 +507,88 @@ Do not pass a vague idea such as `build my application` directly to a setup or c
 workflow. Current workflows do not conduct a multi-turn interview inside an agent
 node: an agent response containing questions completes that node and execution may
 continue. Resolve blocking questions before starting the workflow.
+
+#### Operator procedure
+
+Run discovery from the target project directory in an interactive HAL session. Skill
+expansion is not performed by `hal run`, so do not use the headless command for the
+interview.
+
+```powershell
+Set-Location "C:\path\to\target-project"
+hal
+```
+
+At the `HAL>` prompt, provide whatever is currently known:
+
+```text
+/new-project I want a local application that helps me organize research notes.
+```
+
+Then:
+
+1. Answer each manageable group of questions. Saying `I don't know` is acceptable;
+   HAL should offer a few sensible options and explain material tradeoffs.
+2. Correct any mistaken inference immediately. The interview must label proposals,
+   assumptions, deferred decisions, and unresolved blockers rather than presenting
+   them as approved facts.
+3. Continue until HAL presents a consolidated project summary and asks for approval.
+4. Approve it explicitly or request corrections. For example:
+
+   ```text
+   I approve this project definition. Return the accepted project brief as Markdown.
+   Do not scaffold or implement the project yet.
+   ```
+
+5. Review the final brief, then authorize a separate, narrow write so the workflow
+   can consume durable repository evidence:
+
+   ```text
+   Create docs/project-brief.md from the approved brief. Do not create any other
+   files, install dependencies, scaffold code, or run a workflow.
+   ```
+
+6. Inspect `docs/project-brief.md` before setup. It must contain the approved purpose,
+   users, scope, non-goals, primary workflows, constraints, decisions, smallest
+   runnable milestone, acceptance criteria, assumptions, deferred decisions, and
+   unresolved questions with blocking impact.
+
+If `/new-project` is reported as unknown, the running HAL installation predates the
+bundled skill or the session was started before HAL was updated. Install or refresh
+the intended HAL checkout using the install guidance in its README, restart HAL,
+and invoke the skill again. Do not replace it with `hal run "/new-project ..."`.
+
+The next step requires a complete repository workflow, not merely the abbreviated
+template below. If the target repository does not already have one, use a separate
+interactive request after reviewing the durable brief:
+
+```text
+Using the approved docs/project-brief.md and the project-setup template in
+workflow-instructions.md, create only .hal/workflows/project-setup.yaml. Complete the
+abbreviated template with fixed, repository-appropriate structure_check and
+diff_check command nodes. The structure check must validate the files and parseable
+configuration required by the approved smallest milestone without executing a
+model-generated verification script or contacting external systems. Do not scaffold
+the application, install dependencies, or run the workflow. Inspect the resulting
+workflow definition and report its effects and any unresolved blocker.
+```
+
+Review the resulting YAML. Its file name and `name` field must both be
+`project-setup`, it must contain no placeholder nodes or commands, and every command
+must use fixed `argv` rather than interpolated user-controlled command text. Then
+inspect and run the exact trusted definition:
+
+```powershell
+hal workflow inspect project-setup --json
+
+hal workflow run project-setup `
+  --input "brief=docs/project-brief.md" `
+  --trust-digest "<digest-from-inspect>" `
+  --json
+```
+
+Do not run setup if the brief contains an unresolved decision that blocks the
+smallest milestone. Do not reuse a trust digest after editing the workflow.
 
 ### `project-setup` template
 
@@ -1294,12 +1377,17 @@ or push.
 Before the first implementation run, confirm:
 
 - [ ] Authoritative evidence and repository instructions were inspected.
+- [ ] `/new-project` discovery was completed interactively, not through `hal run`.
+- [ ] The user explicitly approved the consolidated project definition.
+- [ ] The approved definition is preserved in a reviewed `docs/project-brief.md`.
 - [ ] Requirements are measurable, testable, bounded, and approved for this slice.
 - [ ] Architecture maps requirements to explicit components and enforceable rules.
 - [ ] Safety maps hazards to invariants, controls, tests, and release gates.
 - [ ] Cross-document terms, defaults, states, permissions, and IDs agree.
 - [ ] The backlog slice is bounded, dependency-ready, and has explicit exclusions.
-- [ ] `.hal/workflows/example.yaml` passes `hal workflow inspect example --json`.
+- [ ] The selected workflow template was fully materialized for this repository; no
+      abbreviated placeholder nodes remain.
+- [ ] The selected workflow passes `hal workflow inspect <name> --json`.
 - [ ] The human reviewed the exact workflow digest, capabilities, commands, and
   effects that will run.
 - [ ] `scripts/verify.ps1` works outside the workflow and fails on a known broken

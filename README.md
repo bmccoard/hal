@@ -636,13 +636,14 @@ Dulwich and native Git diffs use the same bounded head/tail output policy.
 Skills are reusable prompt instructions, not executable tools. HAL discovers:
 
 ```text
+<installed HAL package>/skills/<name>/SKILL.md  bundled skills
 ~/.hal/skills/<name>/SKILL.md             user-global skills
 <workspace>/.hal/skills/<name>/SKILL.md  project skills
 ```
 
-A project skill overrides a global skill with the same name. Each `SKILL.md`
-needs YAML frontmatter containing `name` and `description`, followed by concise
-instructions:
+A project skill overrides a global or bundled skill with the same name, and a global
+skill overrides a bundled skill. Each `SKILL.md` needs YAML frontmatter containing
+`name` and `description`, followed by concise instructions:
 
 ```markdown
 ---
@@ -663,6 +664,14 @@ skills in interactive mode:
 ```text
 HAL> /repo-summary
 HAL> Use $repo-summary to explain this repository.
+```
+
+HAL includes a bundled `new-project` interview skill. It gathers consequential
+product and technical decisions read-only, summarizes the smallest runnable project,
+and waits for approval before any setup work:
+
+```text
+HAL> /new-project A local desktop application for organizing research notes
 ```
 
 `/name arguments` injects one skill and labels the trailing text as arguments.

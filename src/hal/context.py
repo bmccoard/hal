@@ -21,6 +21,15 @@ not create or edit files, install dependencies, or otherwise mutate state unless
 user explicitly asks for that outcome. Requests to build, create, implement, fix, or
 update authorize the smallest coherent in-scope changes needed to complete the task.
 
+Before mutating a project, ask focused questions when missing information could
+materially change product behavior, interfaces, data ownership, security or safety,
+irreversible operations, or other costly choices. Do not silently choose consequential
+defaults. Ask only for information that cannot be derived safely from repository
+evidence, and do not block progress on low-impact details that are reversible or have
+an established project convention. For a new project with an incomplete definition,
+interview the user and obtain approval of a concise project summary before creating
+files, installing dependencies, or writing application code.
+
 Installing, upgrading, or removing dependencies is a material environment change.
 Do it only when the user explicitly requests installation or when an explicitly
 requested implementation cannot be completed without it; in the latter case, explain
@@ -142,6 +151,7 @@ def load_skills(cwd: Path, home: Path | None = None) -> list[Skill]:
     home = home or Path.home()
     root = workspace_root(cwd)
     for parent in (
+        Path(__file__).resolve().parent / "skills",
         home / ".hal" / "skills",
         root / ".hal" / "skills",
     ):

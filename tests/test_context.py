@@ -26,6 +26,43 @@ def test_project_skill_overrides_global_and_expands(tmp_path: Path) -> None:
     assert visible == "use $demo now"
 
 
+def test_bundled_new_project_skill_is_discovered_and_expands(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    skills = load_skills(repo, home)
+    skill = next(item for item in skills if item.name == "new-project")
+    expanded, visible = expand_user_input(
+        "/new-project A desktop tool for organizing research",
+        skills,
+        resolve_phases(Config()),
+    )
+
+    assert skill.description.startswith("Interview the user")
+    assert "[skill: new-project]" in expanded
+    assert "Do not create or edit files" in " ".join(expanded.split())
+    assert "Arguments:\nA desktop tool for organizing research" in expanded
+    assert visible == "/new-project A desktop tool for organizing research"
+
+
+def test_project_skill_can_override_bundled_new_project(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    path = repo / ".hal" / "skills" / "new-project"
+    path.mkdir(parents=True)
+    (path / "SKILL.md").write_text(
+        "---\nname: new-project\ndescription: Project interview\n---\nproject override\n",
+        encoding="utf-8",
+    )
+
+    skills = load_skills(repo, home)
+
+    skill = next(item for item in skills if item.name == "new-project")
+    assert skill.body == "project override"
+
+
 def test_hal_global_agents_file_is_loaded(tmp_path: Path) -> None:
     home = tmp_path / "home"; repo = tmp_path / "repo"; (repo / ".git").mkdir(parents=True)
     (home / ".hal").mkdir(parents=True)
@@ -103,6 +140,12 @@ def test_system_prompt_defaults_questions_and_examples_to_read_only(
     assert "example requests" in normalized
     assert "do not create or edit files" in normalized
     assert "unless the user explicitly asks" in normalized
+    assert (
+        "ask focused questions when missing information could materially change"
+        in normalized
+    )
+    assert "Do not silently choose consequential defaults" in normalized
+    assert "obtain approval of a concise project summary" in normalized
     assert "Installing, upgrading, or removing dependencies" in normalized
     assert "obtain the user's approval first" in normalized
     assert 'Treat "check in" and "commit"' in normalized
