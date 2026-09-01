@@ -46,6 +46,27 @@ def test_bundled_new_project_skill_is_discovered_and_expands(tmp_path: Path) -> 
     assert visible == "/new-project A desktop tool for organizing research"
 
 
+def test_bundled_grill_me_skill_is_discovered_and_expands(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+
+    skills = load_skills(repo, home)
+    skill = next(item for item in skills if item.name == "grill-me")
+    expanded, visible = expand_user_input(
+        "/grill-me A plan to replace the storage layer",
+        skills,
+        resolve_phases(Config()),
+    )
+
+    assert skill.description.startswith("Stress-test a plan or design")
+    assert "[skill: grill-me]" in expanded
+    assert "Ask exactly one focused question at a time" in expanded
+    assert "provide a recommended answer" in " ".join(expanded.split())
+    assert "Arguments:\nA plan to replace the storage layer" in expanded
+    assert visible == "/grill-me A plan to replace the storage layer"
+
+
 def test_project_skill_can_override_bundled_new_project(tmp_path: Path) -> None:
     home = tmp_path / "home"
     repo = tmp_path / "repo"

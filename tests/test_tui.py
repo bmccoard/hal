@@ -4,10 +4,14 @@ import asyncio
 import ctypes
 from pathlib import Path
 
+import pytest
+from rich.markdown import Markdown
+from rich.panel import Panel
+from rich.text import Text
 from textual import events
 from textual.widgets import Button, Footer
 
-from hal.agent import Agent
+from hal.agent import Agent, Event, EventKind
 from hal.cancellation import CancellationToken
 from hal.config import Config
 from hal.models import ContentBlock, Message, Request, Response
@@ -15,7 +19,13 @@ from hal.providers import Provider
 from hal.sayings import HAL_SAYINGS
 from hal.sessions import Metadata, SessionStore
 from hal.tools import Registry
-from hal.tui import Composer, ConfirmScreen, HalTui
+from hal.tui import (
+    _MAX_TRANSCRIPT_ENTRIES,
+    AssistantResponse,
+    Composer,
+    ConfirmScreen,
+    HalTui,
+)
 
 
 class FakeProvider(Provider):
@@ -212,5 +222,111 @@ def test_declining_large_paste_leaves_composer_unchanged(tmp_path: Path) -> None
             await pilot.pause()
             assert composer.text == "keep me"
             assert composer._pasted_blocks == {}
+
+    asyncio.run(scenario())
+
+
+def test_stream_events_are_coalesced_before_reaching_ui(monkeypatch, tmp_path: Path) -> None:
+    app, _agent = _app(tmp_path)
+    callbacks = []
+    monkeypatch.setattr(
+        app, "call_from_thread",
+        lambda callback, *args: callbacks.append((callback, args)),
+    )
+
+    for _ in range(1_000):
+        app._event_from_worker(Event(EventKind.ASSISTANT_TEXT, text="x"))
+    app._event_from_worker(Event(EventKind.DONE))
+
+    assert len(callbacks) == 1
+    assert len(app._pending_events) == 2
+    assert app._pending_events[0].kind == EventKind.ASSISTANT_TEXT
+    assert app._pending_events[0].text == "x" * 1_000
+    assert app._pending_events[1].kind == EventKind.DONE
+
+
+@pytest.mark.parametrize(
+    "terminal_event",
+    [
+        Event(EventKind.DONE),
+        Event(EventKind.ERROR),
+        Event(EventKind.TOOL_CALL, name="read_file", tool_use_id="call-1"),
+    ],
+)
+def test_streaming_response_renders_markdown_only_when_card_finishes(
+    terminal_event: Event, tmp_path: Path,
+) -> None:
+    app, _agent = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)):
+            app._render_event(Event(EventKind.ASSISTANT_TEXT, text="**hel"))
+            response = app.response_widget
+            assert response is not None
+            assert response.streaming
+            panel = response.body.render()
+            assert isinstance(panel, Panel)
+            assert isinstance(panel.renderable, Text)
+
+            app._render_event(Event(EventKind.ASSISTANT_TEXT, text="lo**"))
+            assert response.response_text == "**hello**"
+            app._render_event(terminal_event)
+
+            assert not response.streaming
+            panel = response.body.render()
+            assert isinstance(panel, Panel)
+            assert isinstance(panel.renderable, Markdown)
+            assert response.response_text == "**hello**"
+
+    asyncio.run(scenario())
+
+
+def test_transcript_does_not_force_scroll_after_user_moves_up(tmp_path: Path) -> None:
+    app, _agent = _app(tmp_path)
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 20)) as pilot:
+            for number in range(40):
+                app._write(Text(f"line {number}"))
+            await pilot.pause()
+            transcript = app.query_one("#transcript")
+            assert transcript.max_scroll_y > 0
+
+            transcript.scroll_to(y=0, animate=False)
+            await pilot.pause()
+            app._write(Text("new output while reading history"))
+            await pilot.pause()
+            assert transcript.scroll_y == 0
+
+            transcript.scroll_end(animate=False)
+            await pilot.pause()
+            app._write(Text("new output at the tail"))
+            await pilot.pause()
+            assert transcript.scroll_y == transcript.max_scroll_y
+
+    asyncio.run(scenario())
+
+
+def test_long_session_mounts_only_recent_transcript_entries(tmp_path: Path) -> None:
+    app, _agent = _app(tmp_path)
+    total = _MAX_TRANSCRIPT_ENTRIES + 12
+    app.session.messages = [
+        Message("assistant", [ContentBlock("text", text=f"answer {number}")])
+        for number in range(total)
+    ]
+
+    async def scenario() -> None:
+        async with app.run_test(size=(100, 32)) as pilot:
+            await pilot.pause()
+
+            assert len(app.session.messages) == total
+            assert len(app._transcript_widgets) == _MAX_TRANSCRIPT_ENTRIES
+            assert app._hidden_transcript_entries == 13
+            assert app._history_notice is not None
+            assert "complete conversation remains saved" in str(
+                app._history_notice.render()
+            )
+            responses = list(app.query(AssistantResponse))
+            assert responses[-1].response_text == f"answer {total - 1}"
 
     asyncio.run(scenario())

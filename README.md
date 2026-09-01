@@ -382,7 +382,11 @@ or **Paste** to bypass the terminal host and read the clipboard directly.
 
 Transcript text may be selected with `Shift`+drag and copied with `Ctrl+Shift+C`.
 HAL also provides an internal selection-copy action; on Windows that action uses the
-native clipboard API rather than relying on OSC 52 support.
+native clipboard API rather than relying on OSC 52 support. Streaming updates are
+coalesced and rendered as Markdown when each response finishes. Auto-scroll pauses
+when the user moves away from the bottom. To keep long sessions responsive, the TUI
+mounts only the 120 most recent transcript entries; older entries remain in the full
+saved session and a notice reports how many are hidden from the live view.
 
 Every interactive startup displays one randomly selected HAL quotation. The small,
 central catalog lives in `src/hal/sayings.py`, so startup lines can be reviewed or
@@ -690,6 +694,14 @@ and waits for approval before any setup work:
 
 ```text
 HAL> /new-project A local desktop application for organizing research notes
+```
+
+The bundled `grill-me` skill stress-tests an existing plan or design. It investigates
+repository evidence, follows dependent decisions one question at a time, recommends
+an answer for each question, and finishes with a shared-understanding recap:
+
+```text
+HAL> /grill-me A plan to replace the storage layer
 ```
 
 `/name arguments` injects one skill and labels the trailing text as arguments.

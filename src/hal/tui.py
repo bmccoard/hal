@@ -6,6 +6,7 @@ import os
 import re
 import threading
 import time
+from collections import deque
 from ctypes import wintypes
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
+from textual.widget import Widget
 from textual.widgets import Button, Footer, Static, TextArea
 
 from . import __version__
@@ -35,6 +37,8 @@ from .workflows import WORKFLOWS, parse_workflow_command, run_workflow
 
 
 _COLLAPSED_PASTE_BYTES = 5 * 1_024
+_STREAM_FLUSH_SECONDS = 0.05
+_MAX_TRANSCRIPT_ENTRIES = 120
 
 
 class Composer(TextArea):
@@ -248,16 +252,20 @@ class ConfirmScreen(ModalScreen[bool]):
 
 
 class AssistantResponse(Vertical):
-    """An assistant Markdown response with its original text available to copy."""
+    """An assistant response that renders Markdown once streaming has finished."""
 
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, *, streaming: bool = False) -> None:
         super().__init__(classes="assistant-response transcript-entry")
         self.response_text = text
-        self.body = Static(self._panel(text), classes="response-content")
+        self.streaming = streaming
+        self.body = Static(
+            self._panel(text, markdown=not streaming), classes="response-content",
+        )
 
     @staticmethod
-    def _panel(text: str) -> Panel:
-        return Panel(Markdown(text), title="HAL", border_style="green")
+    def _panel(text: str, *, markdown: bool) -> Panel:
+        content = Markdown(text) if markdown else Text(text)
+        return Panel(content, title="HAL", border_style="green")
 
     def compose(self) -> ComposeResult:
         yield self.body
@@ -265,7 +273,13 @@ class AssistantResponse(Vertical):
 
     def update_response(self, text: str) -> None:
         self.response_text = text
-        self.body.update(self._panel(text))
+        self.body.update(self._panel(text, markdown=False))
+
+    def finalize_response(self) -> None:
+        if not self.streaming:
+            return
+        self.streaming = False
+        self.body.update(self._panel(self.response_text, markdown=True))
 
 
 class HalTui(App[int]):
@@ -337,6 +351,12 @@ class HalTui(App[int]):
         self.response_widget: AssistantResponse | None = None
         self.commentary_text = ""
         self.commentary_widget: Static | None = None
+        self._pending_events: list[Event] = []
+        self._pending_events_lock = threading.Lock()
+        self._event_flush_scheduled = False
+        self._transcript_widgets: deque[Widget] = deque()
+        self._hidden_transcript_entries = 0
+        self._history_notice: Static | None = None
         self.startup_saying = startup_saying()
         self.agent.on_event = self._event_from_worker
 
@@ -368,8 +388,29 @@ class HalTui(App[int]):
                 style="dim",
             ))
             return
+        entries: list[tuple[str, str]] = []
         for message in self.session.messages:
-            self._render_message(message)
+            if message.role == "user":
+                text = message.display_text or "\n".join(
+                    block.text for block in message.content if block.type == "text"
+                )
+                if text:
+                    entries.append(("user", text))
+            elif message.role == "assistant":
+                entries.extend(
+                    ("assistant", block.text)
+                    for block in message.content
+                    if block.type == "text" and block.text
+                )
+        if len(entries) > _MAX_TRANSCRIPT_ENTRIES:
+            self._hidden_transcript_entries = len(entries) - _MAX_TRANSCRIPT_ENTRIES
+            entries = entries[-_MAX_TRANSCRIPT_ENTRIES:]
+            self._update_history_notice()
+        for role, text in entries:
+            if role == "user":
+                self._write(Panel(Markdown(text), title="You", border_style="cyan"))
+            else:
+                self._write_response(text)
 
     def _render_message(self, message: Message) -> None:
         if message.role == "user":
@@ -385,26 +426,80 @@ class HalTui(App[int]):
 
     def _write(self, content: object) -> Static:
         transcript = self.query_one("#transcript", VerticalScroll)
+        follow = self._should_follow_tail(transcript)
         widget = Static(content, classes="transcript-entry")
         transcript.mount(widget)
-        transcript.scroll_end(animate=False)
+        self._remember_transcript_widget(widget)
+        if follow:
+            transcript.scroll_end(animate=False)
         return widget
 
-    def _write_response(self, text: str) -> AssistantResponse:
+    def _write_response(
+        self, text: str, *, streaming: bool = False,
+    ) -> AssistantResponse:
         transcript = self.query_one("#transcript", VerticalScroll)
-        widget = AssistantResponse(text)
+        follow = self._should_follow_tail(transcript)
+        widget = AssistantResponse(text, streaming=streaming)
         transcript.mount(widget)
-        transcript.scroll_end(animate=False)
+        self._remember_transcript_widget(widget)
+        if follow:
+            transcript.scroll_end(animate=False)
         return widget
+
+    @staticmethod
+    def _should_follow_tail(transcript: VerticalScroll) -> bool:
+        return (
+            transcript.max_scroll_y <= 0
+            or transcript.scroll_y >= transcript.max_scroll_y - 1
+        )
+
+    def _remember_transcript_widget(self, widget: Widget) -> None:
+        self._transcript_widgets.append(widget)
+        while len(self._transcript_widgets) > _MAX_TRANSCRIPT_ENTRIES:
+            oldest = self._transcript_widgets.popleft()
+            oldest.remove()
+            self._hidden_transcript_entries += 1
+        self._update_history_notice()
+
+    def _update_history_notice(self) -> None:
+        if not self._hidden_transcript_entries:
+            return
+        text = Text(
+            f"{self._hidden_transcript_entries} older transcript entr"
+            f"{'y is' if self._hidden_transcript_entries == 1 else 'ies are'} "
+            "hidden from the live view; the complete conversation remains saved.",
+            style="dim yellow",
+        )
+        if self._history_notice is None:
+            transcript = self.query_one("#transcript", VerticalScroll)
+            self._history_notice = Static(
+                text, classes="transcript-history-notice transcript-entry",
+            )
+            before = transcript.children[0] if transcript.children else None
+            if before is None:
+                transcript.mount(self._history_notice)
+            else:
+                transcript.mount(self._history_notice, before=before)
+        else:
+            self._history_notice.update(text)
 
     def _clear_transcript(self) -> None:
         self.response_text = ""
         self.response_widget = None
         self.commentary_text = ""
         self.commentary_widget = None
+        self._transcript_widgets.clear()
+        self._hidden_transcript_entries = 0
+        self._history_notice = None
         self.query_one("#transcript", VerticalScroll).remove_children()
 
     def _finish_response_card(self) -> None:
+        if self.response_widget is not None:
+            transcript = self.query_one("#transcript", VerticalScroll)
+            follow = self._should_follow_tail(transcript)
+            self.response_widget.finalize_response()
+            if follow:
+                transcript.scroll_end(animate=False)
         self.response_text = ""
         self.response_widget = None
 
@@ -651,24 +746,57 @@ class HalTui(App[int]):
             self.call_from_thread(self._finish_turn)
 
     def _event_from_worker(self, event: Event) -> None:
-        self.call_from_thread(self._render_event, event)
+        with self._pending_events_lock:
+            if (
+                event.kind in {
+                    EventKind.ASSISTANT_TEXT, EventKind.ASSISTANT_COMMENTARY,
+                }
+                and self._pending_events
+                and self._pending_events[-1].kind == event.kind
+            ):
+                self._pending_events[-1].text += event.text
+            else:
+                self._pending_events.append(event)
+            if self._event_flush_scheduled:
+                return
+            self._event_flush_scheduled = True
+        self.call_from_thread(self._schedule_event_flush)
+
+    def _schedule_event_flush(self) -> None:
+        self.set_timer(_STREAM_FLUSH_SECONDS, self._flush_pending_events)
+
+    def _flush_pending_events(self) -> None:
+        with self._pending_events_lock:
+            pending, self._pending_events = self._pending_events, []
+            self._event_flush_scheduled = False
+        for event in pending:
+            self._render_event(event)
 
     def _render_event(self, event: Event) -> None:
         if event.kind == EventKind.ASSISTANT_TEXT and event.text:
             self._finish_commentary_card()
             self.response_text += event.text
+            transcript = self.query_one("#transcript", VerticalScroll)
+            follow = self._should_follow_tail(transcript)
             if self.response_widget is None:
-                self.response_widget = self._write_response(self.response_text)
+                self.response_widget = self._write_response(
+                    self.response_text, streaming=True,
+                )
             else:
                 self.response_widget.update_response(self.response_text)
-                self.query_one("#transcript", VerticalScroll).scroll_end(animate=False)
+                if follow:
+                    transcript.scroll_end(animate=False)
         elif event.kind == EventKind.ASSISTANT_COMMENTARY and event.text:
             self.commentary_text += event.text
             content = Text(self.commentary_text, style="italic dim")
             if self.commentary_widget is None:
                 self.commentary_widget = self._write(content)
             else:
+                transcript = self.query_one("#transcript", VerticalScroll)
+                follow = self._should_follow_tail(transcript)
                 self.commentary_widget.update(content)
+                if follow:
+                    transcript.scroll_end(animate=False)
         elif event.kind == EventKind.TOOL_CALL:
             self._finish_response_card()
             self._finish_commentary_card()
@@ -728,9 +856,13 @@ class HalTui(App[int]):
             self._finish_commentary_card()
 
     def _write_error(self, message: str, style: str) -> None:
+        self._flush_pending_events()
         self._write(Text(message, style=style))
 
     def _finish_turn(self) -> None:
+        self._flush_pending_events()
+        self._finish_response_card()
+        self._finish_commentary_card()
         saved = self._save_session()
         self.cancellation = None
         self._set_busy(False)
