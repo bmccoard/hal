@@ -2,7 +2,15 @@
 # ignored .env file when possible so routine config inspection cannot display them.
 
 provider: openrouter
-model: openai/gpt-4o-mini
+model: qwen/qwen3-coder-next
+# model: mistralai/devstral-2512
+# model: openai/gpt-oss-120b
+# model: tencent/hy3-preview
+# model: openai/gpt-4o-mini
+# model: openai/gpt-oss-20b:free
+
+#provider: meta
+#model: muse-spark-1.2-contributor
 
 # Maximum output requested from the provider for each response. If a provider
 # still truncates a clean text-only response, HAL can ask it to continue a

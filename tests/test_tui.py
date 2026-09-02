@@ -264,7 +264,8 @@ def test_streaming_response_renders_markdown_only_when_card_finishes(
             response = app.response_widget
             assert response is not None
             assert response.streaming
-            panel = response.body.render()
+            visual = response.body.render()
+            panel = getattr(visual, "_renderable", visual)
             assert isinstance(panel, Panel)
             assert isinstance(panel.renderable, Text)
 
@@ -273,7 +274,8 @@ def test_streaming_response_renders_markdown_only_when_card_finishes(
             app._render_event(terminal_event)
 
             assert not response.streaming
-            panel = response.body.render()
+            visual = response.body.render()
+            panel = getattr(visual, "_renderable", visual)
             assert isinstance(panel, Panel)
             assert isinstance(panel.renderable, Markdown)
             assert response.response_text == "**hello**"

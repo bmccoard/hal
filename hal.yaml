@@ -1,11 +1,14 @@
-#provider: openrouter
-#model: openai/gpt-oss-120b
+provider: openrouter
+model: qwen/qwen3-coder-next
+# model: mistralai/devstral-2512
+# model: openai/gpt-oss-120b
 # model: tencent/hy3-preview
 # model: openai/gpt-4o-mini
 # model: openai/gpt-oss-20b:free
 
-provider: meta
-model: muse-spark-1.2-contributor
+#provider: meta
+#model: muse-spark-1.2-contributor
+
 
 only_write_locally: true
 bash_policy: normal  # normal, approve, or deny

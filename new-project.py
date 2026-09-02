@@ -20,6 +20,7 @@ TEXT_FILES = {
     "src/hal_simple/__init__.py",
     "src/hal_simple/tools.py",
     "tests/test_tools.py",
+    "activate.ps1",
 }
 
 
