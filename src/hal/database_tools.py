@@ -162,14 +162,16 @@ class SQLiteTools:
                 return int(time.monotonic() >= deadline)
 
             def authorize(
-                action: int, one: str | None, _two: str | None,
+                action: int, one: str | None, two: str | None,
                 _database: str | None, _trigger: str | None,
             ) -> int:
-                if (
-                    schema_access and action == getattr(sqlite3, "SQLITE_PRAGMA", -1)
-                    and one in {"table_info", "index_list"}
-                ):
-                    return sqlite3.SQLITE_OK
+                """Allow schema inspection when schema_access=True."""
+                if schema_access:
+                    if action == getattr(sqlite3, "SQLITE_PRAGMA", -1):
+                        if one in ("table_info", "index_list", "index_info", "table_xinfo"):
+                            return sqlite3.SQLITE_OK
+                    if action == getattr(sqlite3, "SQLITE_READ", -1):
+                        return sqlite3.SQLITE_OK
                 return sqlite3.SQLITE_DENY if action in _DENIED_ACTIONS else sqlite3.SQLITE_OK
 
             connection.set_progress_handler(progress, 1_000)
@@ -218,15 +220,19 @@ class SchemaTool(Tool):
             ).fetchall()
             result = []
             for name, kind, sql in objects:
+                # PRAGMA statements cannot be safely parameterized; interpolate the table name.
+                escaped_name = name.replace('"', '""')
+                column_pragma = f'PRAGMA table_info("{escaped_name}")'
+                index_pragma = f'PRAGMA index_list("{escaped_name}")'
                 columns = [
                     {"name": row[1], "type": row[2], "not_null": bool(row[3]),
                      "default": row[4], "primary_key": bool(row[5])}
-                    for row in connection.execute("SELECT * FROM pragma_table_info(?)", (name,))
+                    for row in connection.execute(column_pragma)
                 ]
                 indexes = [
                     {"name": row[1], "unique": bool(row[2]), "origin": row[3],
                      "partial": bool(row[4])}
-                    for row in connection.execute("SELECT * FROM pragma_index_list(?)", (name,))
+                    for row in connection.execute(index_pragma)
                 ]
                 result.append({
                     "name": name, "type": kind, "columns": columns,
